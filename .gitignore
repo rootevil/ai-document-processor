@@ -20,3 +20,11 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Uploaded and processed documents
+data/uploads/*
+data/processed/*
+
+# Keep directory structure in Git
+!data/uploads/.gitkeep
+!data/processed/.gitkeep
