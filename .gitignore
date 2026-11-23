@@ -28,3 +28,11 @@ data/processed/*
 # Keep directory structure in Git
 !data/uploads/.gitkeep
 !data/processed/.gitkeep
+
+# Uploaded documents
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Processed documents
+data/processed/*
+!data/processed/.gitkeep
