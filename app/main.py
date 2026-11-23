@@ -2,6 +2,7 @@
 from fastapi import FastAPI
 
 from app.api.routes import router
+from app.api.documents import router as documents_router
 from app.core.config import settings
 
 
@@ -14,5 +15,10 @@ app = FastAPI(
 
 app.include_router(
     router,
+    prefix=settings.api_v1_prefix,
+)
+
+app.include_router(
+    documents_router,
     prefix=settings.api_v1_prefix,
 )
