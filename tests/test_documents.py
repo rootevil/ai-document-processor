@@ -295,3 +295,150 @@ def test_document_records_persist():
     assert retrieved[0].file_size == 1024
 
     assert retrieved[0].status == "uploaded"
+
+#RETRIEVE DOCUMENT METADATA
+def test_get_document(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.documents.settings.upload_dir",
+        tmp_path / "uploads",
+    )
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    upload_response = client.post(
+        "/api/v1/documents/upload",
+        files={
+            "file": (
+                "invoice.pdf",
+                b"%PDF-1.7\nSample invoice",
+                "application/pdf",
+            )
+        },
+    )
+
+    document_id = upload_response.json()["id"]
+
+    response = client.get(
+        f"/api/v1/documents/{document_id}"
+    )
+
+    assert response.status_code == 200
+
+    document = response.json()
+
+    assert document["id"] == document_id
+    assert document["original_filename"] == "invoice.pdf"
+    assert document["status"] == "uploaded"
+
+#DOWNLOAD THE ORIGINAL DATA
+def test_download_document(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.documents.settings.upload_dir",
+        tmp_path / "uploads",
+    )
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    file_content = b"%PDF-1.7\nOriginal invoice content"
+
+    upload_response = client.post(
+        "/api/v1/documents/upload",
+        files={
+            "file": (
+                "invoice.pdf",
+                file_content,
+                "application/pdf",
+            )
+        },
+    )
+
+    document_id = upload_response.json()["id"]
+
+    response = client.get(
+        f"/api/v1/documents/{document_id}/download"
+    )
+
+    assert response.status_code == 200
+
+    assert response.content == file_content
+
+    assert response.headers["content-type"] == "application/pdf"
+
+    assert "invoice.pdf" in response.headers["content-disposition"]
+
+#...HANDLE NON EXISTENT DOCUMENT
+
+def test_get_nonexistent_document(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.documents.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    response = client.get(
+        "/api/v1/documents/nonexistent-document-id"
+    )
+
+    assert response.status_code == 404
+
+    assert response.json() == {
+        "detail": "Document not found"
+    }
+
+#HANDLE MISSING PHYSICAL FILES
+
+def test_download_missing_physical_file(
+    tmp_path,
+    monkeypatch,
+):
+    upload_dir = tmp_path / "uploads"
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.upload_dir",
+        upload_dir,
+    )
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    upload_response = client.post(
+        "/api/v1/documents/upload",
+        files={
+            "file": (
+                "invoice.pdf",
+                b"%PDF-1.7\nSample invoice",
+                "application/pdf",
+            )
+        },
+    )
+
+    document_id = upload_response.json()["id"]
+    stored_filename = upload_response.json()["stored_filename"]
+
+    # Simulate a file being deleted from storage.
+    (upload_dir / stored_filename).unlink()
+
+    response = client.get(
+        f"/api/v1/documents/{document_id}/download"
+    )
+
+    assert response.status_code == 404
+
+    assert response.json() == {
+        "detail": "Document file not found"
+    }

@@ -73,3 +73,30 @@ def list_document_records() -> list[DocumentRecord]:
         )
         for row in rows
     ]
+
+
+def get_document_record(
+    document_id: str,
+) -> DocumentRecord | None:
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM documents
+            WHERE id = ?
+            """,
+            (document_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return DocumentRecord(
+        **{
+            **dict(row),
+            "uploaded_at": datetime.fromisoformat(
+                row["uploaded_at"]
+            ),
+        }
+    )
