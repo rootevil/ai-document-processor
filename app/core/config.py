@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     max_upload_size: int = 10 * 1024 * 1024
     upload_dir: Path = Path("data/uploads")
+    database_path: Path = Path("data/database/document_ai.db")
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

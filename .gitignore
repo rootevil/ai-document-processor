@@ -36,3 +36,7 @@ data/uploads/*
 # Processed documents
 data/processed/*
 !data/processed/.gitkeep
+
+# Local database files
+data/database/*
+!data/database/.gitkeep
