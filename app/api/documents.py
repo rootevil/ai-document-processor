@@ -26,6 +26,7 @@ from app.services.processing_repository import (
     get_processing_result,
     get_processing_history,
     DocumentAlreadyProcessingError,
+    DocumentLifecycleError,
 )
 
 router = APIRouter(
@@ -183,11 +184,26 @@ def process_uploaded_document(document_id: str):
         )
 
     # STEP 3:
-    # Verify that the physical file exists.
+    # Verify the physical file exists and still matches the
+    # size recorded when it was uploaded.
     if not file_path.is_file():
         raise HTTPException(
             status_code=404,
             detail="Document file not found",
+        )
+
+    try:
+        stored_file_size = file_path.stat().st_size
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to verify the stored document",
+        ) from exc
+
+    if stored_file_size != document.file_size:
+        raise HTTPException(
+            status_code=409,
+            detail="Stored document size does not match its recorded metadata",
         )
 
     # STEP 4:
@@ -203,6 +219,12 @@ def process_uploaded_document(document_id: str):
         )
 
     except DocumentAlreadyProcessingError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    except DocumentLifecycleError as exc:
         raise HTTPException(
             status_code=409,
             detail=str(exc),

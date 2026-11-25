@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from app.db.database import initialize_database
 from app.main import app
 from app.services.processing_repository import start_processing_attempt
+from app.services.processing_repository import update_document_status
 from tests.create_sample_pdf import create_sample_pdf
 from tests.create_sample_excel import create_sample_excel
 
@@ -278,4 +279,92 @@ def test_process_already_processing_document_returns_conflict(
 
     assert response.status_code == 409
     assert "already being processed" in response.json()["detail"]
-    
+
+
+def test_process_document_with_invalid_lifecycle_state_returns_conflict(
+    tmp_path,
+    monkeypatch,
+):
+    upload_dir = tmp_path / "uploads"
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.upload_dir",
+        upload_dir,
+    )
+    monkeypatch.setattr(
+        "app.db.database.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    pdf_path = tmp_path / "sample_invoice.pdf"
+    create_sample_pdf(pdf_path)
+    upload_response = client.post(
+        "/api/v1/documents/upload",
+        files={
+            "file": (
+                "sample_invoice.pdf",
+                pdf_path.read_bytes(),
+                "application/pdf",
+            )
+        },
+    )
+    assert upload_response.status_code == 200
+    document_id = upload_response.json()["id"]
+
+    update_document_status(document_id, "archived")
+
+    response = client.post(
+        f"/api/v1/documents/{document_id}/process"
+    )
+
+    assert response.status_code == 409
+    assert "cannot be processed" in response.json()["detail"]
+
+
+def test_process_document_with_changed_file_size_returns_conflict(
+    tmp_path,
+    monkeypatch,
+):
+    upload_dir = tmp_path / "uploads"
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.upload_dir",
+        upload_dir,
+    )
+    monkeypatch.setattr(
+        "app.db.database.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    pdf_path = tmp_path / "sample_invoice.pdf"
+    create_sample_pdf(pdf_path)
+    upload_response = client.post(
+        "/api/v1/documents/upload",
+        files={
+            "file": (
+                "sample_invoice.pdf",
+                pdf_path.read_bytes(),
+                "application/pdf",
+            )
+        },
+    )
+    assert upload_response.status_code == 200
+
+    document = upload_response.json()
+    stored_path = upload_dir / document["stored_filename"]
+
+    # Change the stored file after upload to simulate corruption.
+    stored_path.write_bytes(stored_path.read_bytes() + b"corruption")
+
+    response = client.post(
+        f"/api/v1/documents/{document['id']}/process"
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Stored document size does not match its recorded metadata"
+    }

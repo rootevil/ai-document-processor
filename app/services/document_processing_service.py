@@ -8,7 +8,6 @@ from app.document_processing.document_processor import (
 )
 
 from app.services.processing_repository import (
-    update_document_status,
     save_processing_result,
     start_processing_attempt,
     complete_processing_attempt,
@@ -35,13 +34,6 @@ def process_and_save_document(
 
     attempt_id = attempt["attempt_id"]
     started_at = attempt["started_at"]
-
-    # STEP 2:
-    # Mark the document as currently processing.
-    update_document_status(
-        document_id,
-        "processing",
-    )
 
     try:
         # STEP 3:
@@ -70,13 +62,6 @@ def process_and_save_document(
             status="completed",
         )
 
-        # STEP 6:
-        # Update the document's overall status.
-        update_document_status(
-            document_id,
-            "completed",
-        )
-
         return {
             "document_id": document_id,
             "attempt_id": attempt_id,
@@ -95,11 +80,6 @@ def process_and_save_document(
             error_message=str(exc),
         )
 
-        update_document_status(
-            document_id,
-            "failed",
-        )
-
         # Do not overwrite the previous successful result.
         raise
 
@@ -111,11 +91,6 @@ def process_and_save_document(
             status="failed",
             error_code="INTERNAL_PROCESSING_ERROR",
             error_message="An unexpected processing error occurred.",
-        )
-
-        update_document_status(
-            document_id,
-            "failed",
         )
 
         # Let the API layer handle the unexpected exception.

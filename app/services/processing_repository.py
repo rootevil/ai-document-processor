@@ -7,12 +7,15 @@ from app.db.database import get_connection
 
 class DocumentAlreadyProcessingError(Exception):
     """
-    Raised when a document already has an active
-    processing attempt.
+    Raised when a document already has an active processing attempt.
 
-    Prevents duplicate extraction requests from
-    processing the same document simultaneously.
+    This prevents duplicate extraction requests from processing
+    the same document simultaneously.
     """
+
+
+class DocumentLifecycleError(Exception):
+    """Raised when a document cannot be processed from its current state."""
 
 def update_document_status(
     document_id: str,
@@ -199,10 +202,10 @@ def start_processing_attempt(document_id: str) -> dict:
                 f"Document '{document_id}' is already being processed."
             )
 
-        # Verify that the document exists.
+        # Verify that the document exists and read its lifecycle status.
         document = connection.execute(
             """
-            SELECT id
+            SELECT id, status
             FROM documents
             WHERE id = ?
             """,
@@ -212,6 +215,15 @@ def start_processing_attempt(document_id: str) -> dict:
         if document is None:
             raise ValueError(
                 f"Document '{document_id}' does not exist."
+            )
+
+        # A new attempt is allowed after upload or after a previous
+        # attempt finished. Other states indicate an invalid transition.
+        allowed_statuses = {"uploaded", "completed", "failed"}
+        if document["status"] not in allowed_statuses:
+            raise DocumentLifecycleError(
+                f"Document '{document_id}' cannot be processed from "
+                f"status '{document['status']}'."
             )
 
         # Find the highest previous attempt number.
@@ -292,12 +304,34 @@ def complete_processing_attempt(
     Historical attempts are updated, not deleted.
     """
 
+    if status not in {"completed", "failed"}:
+        raise ValueError(
+            "A processing attempt can only finish as 'completed' or 'failed'."
+        )
+
     # Record when this processing attempt finishes.
     completed_at = datetime.now(
         timezone.utc
     ).isoformat()
 
     with get_connection() as connection:
+
+        # Find the related document so its status can be updated
+        # in the same transaction as the attempt.
+        attempt = connection.execute(
+            """
+            SELECT document_id
+            FROM processing_attempts
+            WHERE attempt_id = ?
+            AND status = 'processing'
+            """,
+            (attempt_id,),
+        ).fetchone()
+
+        if attempt is None:
+            raise ValueError(
+                f"Active processing attempt '{attempt_id}' was not found."
+            )
 
         # Update the existing attempt using its unique ID.
         connection.execute(
@@ -317,6 +351,16 @@ def complete_processing_attempt(
                 completed_at,
                 attempt_id,
             ),
+        )
+
+        # Keep the document and attempt lifecycle states in sync.
+        connection.execute(
+            """
+            UPDATE documents
+            SET status = ?
+            WHERE id = ?
+            """,
+            (status, attempt["document_id"]),
         )
 
 

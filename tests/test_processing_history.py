@@ -1,6 +1,8 @@
 import pytest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
-from app.db.database import initialize_database
+from app.db.database import get_connection, initialize_database
 
 from app.services.document_repository import (
     create_document_record,
@@ -8,6 +10,7 @@ from app.services.document_repository import (
 
 from app.services.processing_repository import (
     DocumentAlreadyProcessingError,
+    DocumentLifecycleError,
     save_processing_result,
     start_processing_attempt,
     complete_processing_attempt,
@@ -209,6 +212,73 @@ def test_cannot_start_second_active_attempt(
     # A later attempt can start and receives the next number.
     second = start_processing_attempt(document.id)
     assert second["attempt_number"] == 2
+
+
+def test_cannot_process_document_in_invalid_lifecycle_state(
+    tmp_path,
+    monkeypatch,
+):
+    """Documents outside the allowed states cannot start an attempt."""
+
+    monkeypatch.setattr(
+        "app.db.database.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+    document = create_test_document()
+
+    # Simulate a stale processing status with no active attempt.
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE documents SET status = ? WHERE id = ?",
+            ("processing", document.id),
+        )
+
+    with pytest.raises(DocumentLifecycleError, match="cannot be processed"):
+        start_processing_attempt(document.id)
+
+    # The rejected transition must not create a history row.
+    assert get_processing_history(document.id) == []
+
+
+def test_concurrent_attempt_requests_create_only_one_active_attempt(
+    tmp_path,
+    monkeypatch,
+):
+    """Simultaneous callers cannot both start an active attempt."""
+
+    monkeypatch.setattr(
+        "app.db.database.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+    document = create_test_document()
+    barrier = Barrier(2)
+
+    def try_start_attempt():
+        barrier.wait()
+        try:
+            return start_processing_attempt(document.id)
+        except DocumentAlreadyProcessingError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: try_start_attempt(), range(2)))
+
+    successful_attempts = [
+        result for result in results
+        if isinstance(result, dict)
+    ]
+    rejected_attempts = [
+        result for result in results
+        if isinstance(result, DocumentAlreadyProcessingError)
+    ]
+
+    assert len(successful_attempts) == 1
+    assert len(rejected_attempts) == 1
+    assert len(get_processing_history(document.id)) == 1
 
 def test_processing_history_for_unknown_document(
     tmp_path,
