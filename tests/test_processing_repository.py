@@ -3,6 +3,15 @@ import pytest
 
 from app.db.database import initialize_database
 
+from app.services.processing_repository import (
+    update_document_status,
+    save_processing_result,
+    get_processing_result,
+    start_processing_attempt,
+    complete_processing_attempt,
+    get_processing_history,
+)
+
 from app.services.document_repository import (
     create_document_record,
 )
@@ -70,11 +79,12 @@ def test_save_and_retrieve_processing_result(
 
     assert result["error_message"] is None
 
-
+    
 def test_save_failed_processing_result(
     tmp_path,
     monkeypatch,
 ):
+    # Use a temporary database for test isolation.
     monkeypatch.setattr(
         "app.db.database.settings.database_path",
         tmp_path / "document_ai.db",
@@ -82,6 +92,7 @@ def test_save_failed_processing_result(
 
     initialize_database()
 
+    # Create a document record first.
     document = create_document_record(
         original_filename="invalid.pdf",
         stored_filename="invalid.pdf",
@@ -89,23 +100,43 @@ def test_save_failed_processing_result(
         file_size=100,
     )
 
-    # Save the failed processing attempt.
-    save_processing_result(
-        document_id=document.id,
-        extraction_data=None,
+    # Start a new processing attempt.
+    attempt = start_processing_attempt(
+        document.id
+    )
+
+    # Mark the attempt as failed.
+    complete_processing_attempt(
+        attempt_id=attempt["attempt_id"],
         status="failed",
-        started_at="2026-11-24T10:00:00+00:00",
-        completed_at="2026-11-24T10:00:01+00:00",
+        error_code="DOCUMENT_PROCESSING_FAILED",
         error_message="Unable to extract PDF",
     )
 
+    # Failed attempts should not appear as successful
+    # extraction results.
     result = get_processing_result(document.id)
 
-    assert result["status"] == "failed"
+    assert result is None
 
-    assert result["extracted_data"] is None
+    # The failure should instead be available
+    # through the processing history.
+    history = get_processing_history(document.id)
 
-    assert result["error_message"] == "Unable to extract PDF"
+    assert len(history) == 1
+
+    assert history[0]["status"] == "failed"
+
+    assert (
+        history[0]["error_message"]
+        == "Unable to extract PDF"
+    )
+
+    assert (
+        history[0]["error_code"]
+        == "DOCUMENT_PROCESSING_FAILED"
+    )
+
 
 
 def test_update_document_status(

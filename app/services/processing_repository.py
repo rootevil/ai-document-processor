@@ -1,6 +1,6 @@
 
 import json
-
+import uuid
 from datetime import datetime, timezone
 
 from app.db.database import get_connection
@@ -119,6 +119,7 @@ def get_processing_result(document_id: str) -> dict | None:
             SELECT *
             FROM processing_results
             WHERE document_id = ?
+            AND status = 'completed'
             """,
             (document_id,),
         ).fetchone()
@@ -137,3 +138,145 @@ def get_processing_result(document_id: str) -> dict | None:
         )
 
     return result
+
+
+def start_processing_attempt(document_id: str) -> dict:
+    """
+    Create a new processing attempt.
+
+    Every time a document is processed, we create a new
+    attempt instead of overwriting its previous history.
+
+    Returns the unique attempt ID and attempt number.
+    """
+
+    # Generate a unique ID for this processing attempt.
+    attempt_id = str(uuid.uuid4())
+
+    # Record when this processing attempt begins.
+    started_at = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    with get_connection() as connection:
+
+        # Find the highest previous attempt number
+        # belonging to this document.
+        row = connection.execute(
+            """
+            SELECT MAX(attempt_number) AS last_attempt
+            FROM processing_attempts
+            WHERE document_id = ?
+            """,
+            (document_id,),
+        ).fetchone()
+
+        # The first attempt starts at number 1.
+        # Otherwise, increment the previous attempt number.
+        attempt_number = (
+            (row["last_attempt"] or 0) + 1
+        )
+
+        # Create a new historical processing record.
+        connection.execute(
+            """
+            INSERT INTO processing_attempts (
+                attempt_id,
+                document_id,
+                attempt_number,
+                status,
+                error_code,
+                error_message,
+                started_at,
+                completed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                attempt_id,
+                document_id,
+                attempt_number,
+                "processing",
+                None,
+                None,
+                started_at,
+                None,
+            ),
+        )
+
+    return {
+        "attempt_id": attempt_id,
+        "attempt_number": attempt_number,
+        "started_at": started_at,
+    }
+
+
+def complete_processing_attempt(
+    attempt_id: str,
+    status: str,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """
+    Finish an existing processing attempt.
+
+    This function records whether extraction succeeded
+    or failed.
+
+    Historical attempts are updated, not deleted.
+    """
+
+    # Record when this processing attempt finishes.
+    completed_at = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    with get_connection() as connection:
+
+        # Update the existing attempt using its unique ID.
+        connection.execute(
+            """
+            UPDATE processing_attempts
+            SET
+                status = ?,
+                error_code = ?,
+                error_message = ?,
+                completed_at = ?
+            WHERE attempt_id = ?
+            """,
+            (
+                status,
+                error_code,
+                error_message,
+                completed_at,
+                attempt_id,
+            ),
+        )
+
+
+def get_processing_history(document_id: str) -> list[dict]:
+    """
+    Retrieve all processing attempts for a document.
+
+    Results are returned in reverse chronological order,
+    with the newest attempt appearing first.
+    """
+
+    with get_connection() as connection:
+
+        # Retrieve all attempts associated with the document.
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM processing_attempts
+            WHERE document_id = ?
+            ORDER BY attempt_number DESC
+            """,
+            (document_id,),
+        ).fetchall()
+
+    # Convert database rows into normal Python dictionaries.
+    return [
+        dict(row)
+        for row in rows
+    ]

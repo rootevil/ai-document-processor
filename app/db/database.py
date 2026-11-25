@@ -7,6 +7,7 @@ Responsibilities:
 2. Ensure database directories exist.
 3. Enable foreign-key constraints.
 4. Create the application database tables.
+5. Create indexes for efficient database queries.
 """
 
 import sqlite3
@@ -49,8 +50,8 @@ def get_connection() -> Iterator[sqlite3.Connection]:
     connection.row_factory = sqlite3.Row
 
     # Enable foreign-key constraints for this connection.
-    # This prevents processing results from referencing
-    # documents that do not exist.
+    # This prevents records from referencing documents
+    # that do not exist.
     connection.execute("PRAGMA foreign_keys = ON")
 
     try:
@@ -76,15 +77,20 @@ def initialize_database() -> None:
        Stores uploaded document metadata.
 
     2. processing_results:
-       Stores the latest extraction result and processing status
+       Stores the latest successful extraction result
        for each document.
+
+    3. processing_attempts:
+       Stores the complete history of processing attempts,
+       including successful and failed attempts.
     """
 
     # Open a managed database connection.
     with get_connection() as connection:
 
-        # executescript() supports multiple SQL statements
-        # inside a single SQL script.
+        # executescript() executes multiple SQL statements.
+        # All table and index definitions are kept inside
+        # this single SQL script.
         connection.executescript(
             """
             -- =====================================================
@@ -110,15 +116,12 @@ def initialize_database() -> None:
             -- =====================================================
             -- TABLE 2: processing_results
             -- =====================================================
-            -- Stores the latest processing result for each document.
+            -- Stores the latest successful processing result.
             --
             -- document_id links this record to the documents table.
-            -- extracted_data stores the extraction output as JSON.
-            -- error_message stores processing failure information.
+            -- extracted_data stores extraction output as JSON text.
+            -- error_message stores any associated error information.
             -- started_at and completed_at track processing timestamps.
-            --
-            -- ON DELETE CASCADE automatically removes the processing
-            -- result if its associated document is deleted.
 
             CREATE TABLE IF NOT EXISTS processing_results (
                 document_id TEXT PRIMARY KEY,
@@ -137,6 +140,54 @@ def initialize_database() -> None:
                     REFERENCES documents(id)
                     ON DELETE CASCADE
             );
+
+
+            -- =====================================================
+            -- TABLE 3: processing_attempts
+            -- =====================================================
+            -- Stores every processing attempt for a document.
+            --
+            -- A document can have multiple processing attempts.
+            -- Each attempt receives a unique attempt ID.
+            -- attempt_number tracks the sequence of attempts.
+            -- Failed attempts are preserved for troubleshooting.
+            --
+            -- UNIQUE(document_id, attempt_number) ensures that
+            -- the same document cannot have duplicate attempt numbers.
+
+            CREATE TABLE IF NOT EXISTS processing_attempts (
+                attempt_id TEXT PRIMARY KEY,
+
+                document_id TEXT NOT NULL,
+
+                attempt_number INTEGER NOT NULL,
+
+                status TEXT NOT NULL,
+
+                error_code TEXT,
+
+                error_message TEXT,
+
+                started_at TEXT NOT NULL,
+
+                completed_at TEXT,
+
+                FOREIGN KEY (document_id)
+                    REFERENCES documents(id)
+                    ON DELETE CASCADE,
+
+                UNIQUE (document_id, attempt_number)
+            );
+
+
+            -- =====================================================
+            -- INDEX: processing_attempts
+            -- =====================================================
+            -- Improves retrieval performance when searching
+            -- processing attempts belonging to a document.
+
+            CREATE INDEX IF NOT EXISTS idx_processing_attempts_document_id
+            ON processing_attempts(document_id);
 
             """
         )

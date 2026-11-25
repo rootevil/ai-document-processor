@@ -28,6 +28,10 @@ from app.services.processing_repository import (
     get_processing_result,
 )
 
+from app.services.processing_repository import (
+    get_processing_history,
+)
+
 router = APIRouter(
     prefix="/documents",
     tags=["Documents"],
@@ -264,4 +268,39 @@ def retrieve_processing_result(document_id: str):
         "error_message": result["error_message"],
         "started_at": result["started_at"],
         "completed_at": result["completed_at"],
+    }
+
+
+@router.get("/{document_id}/history")
+def retrieve_processing_history(document_id: str):
+    """
+    Retrieve the complete processing history of a document.
+
+    This endpoint returns every processing attempt,
+    including successful and failed attempts.
+
+    It does not execute document extraction.
+    """
+
+    # STEP 1:
+    # Verify that the requested document exists.
+    document = get_document_record(document_id)
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    # STEP 2:
+    # Retrieve all historical processing attempts.
+    history = get_processing_history(document_id)
+
+    # STEP 3:
+    # Return the historical records.
+    return {
+        "document_id": document.id,
+        "original_filename": document.original_filename,
+        "total_attempts": len(history),
+        "attempts": history,
     }
