@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.db.database import initialize_database
 from app.main import app
-
+from app.services.processing_repository import start_processing_attempt
 from tests.create_sample_pdf import create_sample_pdf
 from tests.create_sample_excel import create_sample_excel
 
@@ -234,3 +234,48 @@ def test_process_missing_physical_file(tmp_path, monkeypatch):
     assert response.json() == {
         "detail": "Document file not found"
     }
+
+def test_process_already_processing_document_returns_conflict(
+    tmp_path,
+    monkeypatch,
+):
+    upload_dir = tmp_path / "uploads"
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.upload_dir",
+        upload_dir,
+    )
+    monkeypatch.setattr(
+        "app.db.database.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    pdf_path = tmp_path / "sample_invoice.pdf"
+    create_sample_pdf(pdf_path)
+
+    upload_response = client.post(
+        "/api/v1/documents/upload",
+        files={
+            "file": (
+                "sample_invoice.pdf",
+                pdf_path.read_bytes(),
+                "application/pdf",
+            )
+        },
+    )
+    assert upload_response.status_code == 200
+
+    document_id = upload_response.json()["id"]
+
+    # Simulate another request already processing this document.
+    start_processing_attempt(document_id)
+
+    response = client.post(
+        f"/api/v1/documents/{document_id}/process"
+    )
+
+    assert response.status_code == 409
+    assert "already being processed" in response.json()["detail"]
+    

@@ -5,6 +5,14 @@ from datetime import datetime, timezone
 
 from app.db.database import get_connection
 
+class DocumentAlreadyProcessingError(Exception):
+    """
+    Raised when a document already has an active
+    processing attempt.
+
+    Prevents duplicate extraction requests from
+    processing the same document simultaneously.
+    """
 
 def update_document_status(
     document_id: str,
@@ -139,15 +147,21 @@ def get_processing_result(document_id: str) -> dict | None:
 
     return result
 
-
 def start_processing_attempt(document_id: str) -> dict:
     """
-    Create a new processing attempt.
+    Atomically create a new processing attempt.
 
-    Every time a document is processed, we create a new
-    attempt instead of overwriting its previous history.
+    This function:
+    1. Acquires a SQLite write lock.
+    2. Checks whether processing is already active.
+    3. Calculates the next attempt number.
+    4. Creates a new processing attempt.
+    5. Updates the document status.
 
-    Returns the unique attempt ID and attempt number.
+    All database operations happen inside one transaction.
+
+    This prevents simultaneous requests from creating
+    multiple active attempts for the same document.
     """
 
     # Generate a unique ID for this processing attempt.
@@ -160,8 +174,47 @@ def start_processing_attempt(document_id: str) -> dict:
 
     with get_connection() as connection:
 
-        # Find the highest previous attempt number
-        # belonging to this document.
+        # Acquire the SQLite write lock immediately.
+        #
+        # Other write transactions must wait until this
+        # transaction commits or rolls back.
+        connection.execute("BEGIN IMMEDIATE")
+
+        # Check whether this document already has an
+        # active processing attempt.
+        active_attempt = connection.execute(
+            """
+            SELECT attempt_id
+            FROM processing_attempts
+            WHERE document_id = ?
+            AND status = 'processing'
+            LIMIT 1
+            """,
+            (document_id,),
+        ).fetchone()
+
+        # Do not allow another active attempt.
+        if active_attempt is not None:
+            raise DocumentAlreadyProcessingError(
+                f"Document '{document_id}' is already being processed."
+            )
+
+        # Verify that the document exists.
+        document = connection.execute(
+            """
+            SELECT id
+            FROM documents
+            WHERE id = ?
+            """,
+            (document_id,),
+        ).fetchone()
+
+        if document is None:
+            raise ValueError(
+                f"Document '{document_id}' does not exist."
+            )
+
+        # Find the highest previous attempt number.
         row = connection.execute(
             """
             SELECT MAX(attempt_number) AS last_attempt
@@ -172,12 +225,12 @@ def start_processing_attempt(document_id: str) -> dict:
         ).fetchone()
 
         # The first attempt starts at number 1.
-        # Otherwise, increment the previous attempt number.
+        # Every subsequent attempt increments the number.
         attempt_number = (
             (row["last_attempt"] or 0) + 1
         )
 
-        # Create a new historical processing record.
+        # Create the new processing attempt.
         connection.execute(
             """
             INSERT INTO processing_attempts (
@@ -203,6 +256,19 @@ def start_processing_attempt(document_id: str) -> dict:
                 None,
             ),
         )
+
+        # Update the document status in the same transaction.
+        connection.execute(
+            """
+            UPDATE documents
+            SET status = ?
+            WHERE id = ?
+            """,
+            ("processing", document_id),
+        )
+
+    # The connection context manager commits the transaction
+    # after all operations complete successfully.
 
     return {
         "attempt_id": attempt_id,

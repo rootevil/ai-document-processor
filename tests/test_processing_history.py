@@ -1,3 +1,4 @@
+import pytest
 
 from app.db.database import initialize_database
 
@@ -6,6 +7,7 @@ from app.services.document_repository import (
 )
 
 from app.services.processing_repository import (
+    DocumentAlreadyProcessingError,
     save_processing_result,
     start_processing_attempt,
     complete_processing_attempt,
@@ -136,12 +138,16 @@ def test_failed_attempt_does_not_replace_successful_result(
     assert history[0]["status"] == "failed"
 
 
+
 def test_processing_attempt_numbers_increment(
     tmp_path,
     monkeypatch,
 ):
     """
     Verify that attempt numbers increment for each document.
+
+    A document must finish its current processing attempt
+    before another attempt can begin.
     """
 
     monkeypatch.setattr(
@@ -153,14 +159,56 @@ def test_processing_attempt_numbers_increment(
 
     document = create_test_document()
 
+    # Start the first processing attempt.
     first = start_processing_attempt(document.id)
-    second = start_processing_attempt(document.id)
-    third = start_processing_attempt(document.id)
 
     assert first["attempt_number"] == 1
-    assert second["attempt_number"] == 2
-    assert third["attempt_number"] == 3
 
+    # Complete the first attempt.
+    # This releases the active-processing restriction.
+    complete_processing_attempt(
+        attempt_id=first["attempt_id"],
+        status="completed",
+    )
+
+    # Start another attempt for the same document.
+    second = start_processing_attempt(document.id)
+
+    # The second attempt should receive the next number.
+    assert second["attempt_number"] == 2
+
+    assert first["attempt_id"] != second["attempt_id"]
+
+def test_cannot_start_second_active_attempt(
+    tmp_path,
+    monkeypatch,
+):
+    """A document can have only one active attempt at a time."""
+
+    monkeypatch.setattr(
+        "app.db.database.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+    document = create_test_document()
+
+    # The first attempt remains active while its status is "processing".
+    first = start_processing_attempt(document.id)
+
+    # A second request for that document must be rejected.
+    with pytest.raises(DocumentAlreadyProcessingError):
+        start_processing_attempt(document.id)
+
+    # Finishing the first attempt releases the active slot.
+    complete_processing_attempt(
+        attempt_id=first["attempt_id"],
+        status="completed",
+    )
+
+    # A later attempt can start and receives the next number.
+    second = start_processing_attempt(document.id)
+    assert second["attempt_number"] == 2
 
 def test_processing_history_for_unknown_document(
     tmp_path,

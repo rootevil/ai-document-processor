@@ -3,7 +3,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-
+from app.services.document_processing_service import (
+    process_and_save_document,
+)
 from app.core.config import settings
 from app.schemas.document import DocumentRecord
 from app.services.document_repository import (
@@ -20,16 +22,10 @@ from app.document_processing.document_processor import (
 from app.services.document_storage import save_document
 from app.services.document_validator import validate_document
 
-from app.services.document_processing_service import (
-    process_and_save_document,
-)
-
 from app.services.processing_repository import (
     get_processing_result,
-)
-
-from app.services.processing_repository import (
     get_processing_history,
+    DocumentAlreadyProcessingError,
 )
 
 router = APIRouter(
@@ -206,6 +202,12 @@ def process_uploaded_document(document_id: str):
             file_path=file_path,
         )
 
+    except DocumentAlreadyProcessingError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    
     except DocumentProcessingError as exc:
 
         # The service has already saved the failed status

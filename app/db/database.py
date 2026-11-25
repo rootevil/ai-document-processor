@@ -42,17 +42,21 @@ def get_connection() -> Iterator[sqlite3.Connection]:
         exist_ok=True,
     )
 
-    # Establish a connection to the SQLite database.
-    connection = sqlite3.connect(database_path)
+    #
+    # If another request is currently writing to SQLite, this connection waits up to 10 seconds before raising a database locking error.
+    connection = sqlite3.connect(
+        database_path,
+        timeout=10.0,
+    )
 
-    # Return database rows as dictionary-like objects.
-    # This allows access using column names, such as row["status"].
+    # Return rows as dictionary-like objects.
     connection.row_factory = sqlite3.Row
 
-    # Enable foreign-key constraints for this connection.
-    # This prevents records from referencing documents
-    # that do not exist.
+    # Enforce foreign-key constraints declared in our tables.
     connection.execute("PRAGMA foreign_keys = ON")
+
+    # Wait up to 10 seconds if another connection holds a database lock.
+    connection.execute("PRAGMA busy_timeout = 10000")
 
     try:
         # Manage the transaction automatically.
@@ -188,6 +192,17 @@ def initialize_database() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_processing_attempts_document_id
             ON processing_attempts(document_id);
+
+            -- =====================================================
+            -- INDEX: ONE ACTIVE PROCESSING ATTEMPT PER DOCUMENT
+            -- =====================================================
+            -- Allow only one active processing attempt per document.
+            -- Completed and failed attempts remain in the history.
+
+            CREATE UNIQUE INDEX IF NOT EXISTS
+            idx_one_active_processing_attempt_per_document
+            ON processing_attempts(document_id)
+            WHERE status = 'processing';   
 
             """
         )
