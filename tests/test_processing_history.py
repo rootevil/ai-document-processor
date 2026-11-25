@@ -1,7 +1,7 @@
 import pytest
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
-
+import sqlite3
 from app.db.database import get_connection, initialize_database
 
 from app.services.document_repository import (
@@ -298,3 +298,46 @@ def test_processing_history_for_unknown_document(
     history = get_processing_history("unknown-document")
 
     assert history == []
+
+def test_start_attempt_rolls_back_if_status_update_fails(
+    tmp_path,
+    monkeypatch,
+):
+    """A failed status update must roll back the inserted attempt."""
+
+    monkeypatch.setattr(
+        "app.db.database.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+    document = create_test_document()
+
+    # Force the document update to fail after the attempt is inserted.
+    with get_connection() as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER fail_processing_status_update
+            BEFORE UPDATE OF status ON documents
+            WHEN NEW.status = 'processing'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated status update failure');
+            END;
+            """
+        )
+
+    # The repository transaction should roll back the attempt insert.
+    with pytest.raises(sqlite3.IntegrityError):
+        start_processing_attempt(document.id)
+
+    # No attempt should remain after the transaction rollback.
+    assert get_processing_history(document.id) == []
+
+    # The document should retain its original lifecycle status.
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT status FROM documents WHERE id = ?",
+            (document.id,),
+        ).fetchone()
+
+    assert row["status"] == "uploaded"
