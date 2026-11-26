@@ -8,6 +8,7 @@ from app.services.document_processing_service import (
 )
 from app.core.config import settings
 from app.schemas.document import DocumentRecord
+from app.schemas.invoice import InvoiceFieldReviewRequest
 from app.services.document_repository import (
     create_document_record,
     get_document_record,
@@ -25,6 +26,10 @@ from app.services.document_validator import validate_document
 from app.services.processing_repository import (
     get_processing_result,
     get_processing_history,
+    get_processing_attempt_result,
+    record_invoice_field_review,
+    get_invoice_field_reviews,
+    get_latest_invoice_field_reviews,
     DocumentAlreadyProcessingError,
     DocumentLifecycleError,
 )
@@ -327,4 +332,172 @@ def retrieve_processing_history(document_id: str):
         "original_filename": document.original_filename,
         "total_attempts": len(history),
         "attempts": history,
+    }
+
+
+# =============================================================
+# INVOICE FIELD REVIEW API
+# =============================================================
+
+def _get_reviewable_attempt(
+    document_id: str,
+    attempt_id: str,
+):
+    """
+    Verify that a document exists and that the requested attempt
+    belongs to it and has an extraction snapshot.
+
+    This prevents accessing one document's extraction through
+    another document's URL.
+    """
+
+    document = get_document_record(document_id)
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    attempts = get_processing_history(document_id)
+
+    matching_attempt = next(
+        (
+            attempt
+            for attempt in attempts
+            if attempt["attempt_id"] == attempt_id
+        ),
+        None,
+    )
+
+    if matching_attempt is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Processing attempt not found for this document",
+        )
+
+    snapshot = get_processing_attempt_result(attempt_id)
+
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No extraction snapshot found for this attempt",
+        )
+
+    return document, snapshot
+
+
+@router.get(
+    "/{document_id}/attempts/{attempt_id}/extraction",
+    summary="Retrieve Original Attempt Extraction",
+)
+def retrieve_attempt_extraction(
+    document_id: str,
+    attempt_id: str,
+):
+    """Retrieve the immutable extraction snapshot for an attempt."""
+
+    _, snapshot = _get_reviewable_attempt(
+        document_id,
+        attempt_id,
+    )
+
+    return snapshot
+
+
+@router.post(
+    "/{document_id}/attempts/{attempt_id}/reviews",
+    status_code=201,
+    summary="Submit Invoice Field Review",
+)
+def submit_invoice_field_review(
+    document_id: str,
+    attempt_id: str,
+    review: InvoiceFieldReviewRequest,
+):
+    """
+    Record an approval, correction, or rejection for one invoice field.
+
+    Human decisions are stored separately from the original extraction.
+    """
+
+    _get_reviewable_attempt(
+        document_id,
+        attempt_id,
+    )
+
+    try:
+        review_id = record_invoice_field_review(
+            attempt_id=attempt_id,
+            field_name=review.field_name,
+            decision=review.decision,
+            corrected_value=review.corrected_value,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
+    # Retrieve the exact event that was just inserted.
+    saved_review = next(
+        item
+        for item in get_invoice_field_reviews(attempt_id)
+        if item["review_id"] == review_id
+    )
+
+    return {
+        "attempt_id": attempt_id,
+        **saved_review,
+    }
+
+
+@router.get(
+    "/{document_id}/attempts/{attempt_id}/reviews",
+    summary="Retrieve Invoice Field Review History",
+)
+def retrieve_invoice_field_review_history(
+    document_id: str,
+    attempt_id: str,
+):
+    """Retrieve every human review event for an extraction attempt."""
+
+    _get_reviewable_attempt(
+        document_id,
+        attempt_id,
+    )
+
+    reviews = get_invoice_field_reviews(attempt_id)
+
+    return {
+        "document_id": document_id,
+        "attempt_id": attempt_id,
+        "total_reviews": len(reviews),
+        "reviews": reviews,
+    }
+
+
+@router.get(
+    "/{document_id}/attempts/{attempt_id}/reviews/latest",
+    summary="Retrieve Latest Invoice Field Reviews",
+)
+def retrieve_latest_invoice_field_reviews(
+    document_id: str,
+    attempt_id: str,
+):
+    """Retrieve the most recent decision independently for each field."""
+
+    _get_reviewable_attempt(
+        document_id,
+        attempt_id,
+    )
+
+    latest_reviews = get_latest_invoice_field_reviews(attempt_id)
+
+    return {
+        "document_id": document_id,
+        "attempt_id": attempt_id,
+        "total_fields_reviewed": len(latest_reviews),
+        "reviews": latest_reviews,
     }

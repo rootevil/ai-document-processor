@@ -174,3 +174,50 @@ class InvoiceExtraction(InvoiceSchemaModel):
 
     document_type: Literal["invoice", "unknown"] = "unknown"
     fields: InvoiceFields = Field(default_factory=InvoiceFields)
+
+
+# =============================================================
+# INVOICE FIELD REVIEW API SCHEMAS
+# =============================================================
+
+class InvoiceFieldReviewRequest(InvoiceSchemaModel):
+    """
+    Request body for submitting one human invoice-field decision.
+
+    A correction stores a replacement value separately.
+    Approval and rejection cannot include replacement values.
+    """
+
+    field_name: Literal[
+        "invoice_number",
+        "invoice_date",
+        "due_date",
+        "vendor_name",
+        "customer_name",
+        "subtotal",
+        "tax_amount",
+        "total_amount",
+        "currency",
+    ]
+
+    decision: Literal["approved", "corrected", "rejected"]
+
+    corrected_value: StrictStr | StrictInt | StrictFloat | None = None
+
+    @model_validator(mode="after")
+    def validate_review_decision(self):
+        """Ensure the replacement value matches the review decision."""
+
+        if self.decision == "corrected" and self.corrected_value is None:
+            raise ValueError(
+                "A corrected decision requires corrected_value."
+            )
+
+        if self.decision in {"approved", "rejected"}:
+            if self.corrected_value is not None:
+                raise ValueError(
+                    "Approved and rejected decisions cannot include "
+                    "corrected_value."
+                )
+
+        return self

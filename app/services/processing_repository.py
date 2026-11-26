@@ -390,3 +390,237 @@ def get_processing_history(document_id: str) -> list[dict]:
         dict(row)
         for row in rows
     ]
+
+
+# =============================================================
+# INVOICE REVIEW REPOSITORY
+# =============================================================
+
+SUPPORTED_INVOICE_REVIEW_FIELDS = {
+    "invoice_number",
+    "invoice_date",
+    "due_date",
+    "vendor_name",
+    "customer_name",
+    "subtotal",
+    "tax_amount",
+    "total_amount",
+    "currency",
+}
+
+SUPPORTED_REVIEW_DECISIONS = {
+    "approved",
+    "corrected",
+    "rejected",
+}
+
+
+def save_processing_attempt_result(
+    attempt_id: str,
+    extraction_data: dict,
+) -> None:
+    """
+    Save the extraction output for one specific processing attempt.
+
+    A snapshot is inserted once and cannot be overwritten. This keeps
+    the original machine extraction available even after human review.
+    """
+
+    if not isinstance(extraction_data, dict):
+        raise ValueError("extraction_data must be a dictionary.")
+
+    serialized_data = json.dumps(extraction_data, allow_nan=False)
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO processing_attempt_results (
+                attempt_id,
+                extracted_data,
+                created_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            (attempt_id, serialized_data, created_at),
+        )
+
+
+def get_processing_attempt_result(
+    attempt_id: str,
+) -> dict | None:
+    """
+    Retrieve the immutable extraction snapshot for one attempt.
+    """
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT attempt_id, extracted_data, created_at
+            FROM processing_attempt_results
+            WHERE attempt_id = ?
+            """,
+            (attempt_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    result = dict(row)
+    result["extracted_data"] = json.loads(result["extracted_data"])
+
+    return result
+
+
+def record_invoice_field_review(
+    attempt_id: str,
+    field_name: str,
+    decision: str,
+    corrected_value=None,
+    reviewer_id: str | None = None,
+) -> str:
+    """
+    Record one human decision for one invoice field.
+
+    Decisions:
+    - approved: accept the extracted value.
+    - corrected: store a replacement value separately.
+    - rejected: reject the extracted value.
+
+    Every call creates a new review event. Previous decisions remain
+    in the review history.
+    """
+
+    if field_name not in SUPPORTED_INVOICE_REVIEW_FIELDS:
+        raise ValueError(f"Unsupported invoice field: {field_name}")
+
+    if decision not in SUPPORTED_REVIEW_DECISIONS:
+        raise ValueError(f"Unsupported review decision: {decision}")
+
+    if decision == "corrected" and corrected_value is None:
+        raise ValueError("A corrected decision requires corrected_value.")
+
+    if decision in {"approved", "rejected"} and corrected_value is not None:
+        raise ValueError(
+            f"A {decision} decision cannot include corrected_value."
+        )
+
+    serialized_value = None
+
+    if decision == "corrected":
+        if isinstance(corrected_value, bool) or not isinstance(
+            corrected_value, (str, int, float)
+        ):
+            raise ValueError(
+                "corrected_value must be a string or numeric scalar."
+            )
+
+        try:
+            serialized_value = json.dumps(
+                corrected_value,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("corrected_value must be valid JSON data.") from error
+
+    review_id = str(uuid.uuid4())
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO invoice_field_reviews (
+                review_id,
+                attempt_id,
+                field_name,
+                decision,
+                corrected_value,
+                reviewer_id,
+                reviewed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                review_id,
+                attempt_id,
+                field_name,
+                decision,
+                serialized_value,
+                reviewer_id,
+                reviewed_at,
+            ),
+        )
+
+    return review_id
+
+
+def _deserialize_invoice_review(row) -> dict:
+    """Convert a review database row into a Python dictionary."""
+
+    review = dict(row)
+
+    if review["corrected_value"] is not None:
+        review["corrected_value"] = json.loads(
+            review["corrected_value"]
+        )
+
+    return review
+
+
+def get_invoice_field_reviews(
+    attempt_id: str,
+) -> list[dict]:
+    """
+    Retrieve every review event for an attempt, oldest first.
+    """
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM invoice_field_reviews
+            WHERE attempt_id = ?
+            ORDER BY review_sequence ASC
+            """,
+            (attempt_id,),
+        ).fetchall()
+
+    return [
+        _deserialize_invoice_review(row)
+        for row in rows
+    ]
+
+
+def get_latest_invoice_field_reviews(
+    attempt_id: str,
+) -> dict[str, dict]:
+    """
+    Return the latest review event for each field in an attempt.
+
+    The complete review history remains available through
+    get_invoice_field_reviews().
+    """
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM invoice_field_reviews
+            WHERE attempt_id = ?
+            ORDER BY review_sequence DESC
+            """,
+            (attempt_id,),
+        ).fetchall()
+
+    latest_reviews = {}
+
+    for row in rows:
+        review = _deserialize_invoice_review(row)
+        field_name = review["field_name"]
+
+        # Rows are newest first, so the first event for each field
+        # is that field's latest decision.
+        if field_name not in latest_reviews:
+            latest_reviews[field_name] = review
+
+    return latest_reviews

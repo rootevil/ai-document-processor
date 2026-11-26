@@ -204,5 +204,109 @@ def initialize_database() -> None:
             ON processing_attempts(document_id)
             WHERE status = 'processing';   
 
+
+
+            -- =====================================================
+            -- TABLE: processing_attempt_results
+            -- Immutable extraction snapshot for each attempt.
+            -- =====================================================
+
+            CREATE TABLE IF NOT EXISTS processing_attempt_results (
+                attempt_id TEXT PRIMARY KEY,
+                extracted_data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+
+                FOREIGN KEY (attempt_id)
+                    REFERENCES processing_attempts(attempt_id)
+                    ON DELETE CASCADE
+            );
+
+            -- Prevent accidental changes to an extraction snapshot.
+            CREATE TRIGGER IF NOT EXISTS
+            prevent_processing_attempt_result_update
+            BEFORE UPDATE ON processing_attempt_results
+            BEGIN
+                SELECT RAISE(ABORT, 'processing attempt results are immutable');
+            END;
+
+
+            -- =====================================================
+            -- TABLE: invoice_field_reviews
+            -- Append-only history of individual field decisions.
+            -- =====================================================
+
+            CREATE TABLE IF NOT EXISTS invoice_field_reviews (
+                review_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                review_id TEXT NOT NULL UNIQUE,
+                attempt_id TEXT NOT NULL,
+
+                field_name TEXT NOT NULL CHECK (field_name IN (
+                    'invoice_number',
+                    'invoice_date',
+                    'due_date',
+                    'vendor_name',
+                    'customer_name',
+                    'subtotal',
+                    'tax_amount',
+                    'total_amount',
+                    'currency'
+                )),
+
+                decision TEXT NOT NULL CHECK (
+                    decision IN ('approved', 'corrected', 'rejected')
+                ),
+
+                corrected_value TEXT,
+                reviewer_id TEXT,
+                reviewed_at TEXT NOT NULL,
+
+                CHECK (
+                    (decision = 'corrected' AND corrected_value IS NOT NULL)
+                    OR
+                    (decision IN ('approved', 'rejected') AND corrected_value IS NULL)
+                ),
+
+                FOREIGN KEY (attempt_id)
+                    REFERENCES processing_attempt_results(attempt_id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS
+            idx_invoice_field_reviews_attempt_field_sequence
+            ON invoice_field_reviews(
+                attempt_id,
+                field_name,
+                review_sequence
+            );
+
+            -- Review events are historical records; do not update them.
+            CREATE TRIGGER IF NOT EXISTS
+            prevent_invoice_field_review_update
+            BEFORE UPDATE ON invoice_field_reviews
+            BEGIN
+                SELECT RAISE(ABORT, 'invoice field reviews are append-only');
+            END;
+
+            -- Prevent deletion of original extraction snapshots.
+            CREATE TRIGGER IF NOT EXISTS
+            prevent_processing_attempt_result_delete
+            BEFORE DELETE ON processing_attempt_results
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'processing attempt results cannot be deleted'
+                );
+            END;
+
+            -- Prevent deletion of human review history.
+            CREATE TRIGGER IF NOT EXISTS
+            prevent_invoice_field_review_delete
+            BEFORE DELETE ON invoice_field_reviews
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'invoice field reviews cannot be deleted'
+                );
+            END;
             """
         )

@@ -9,6 +9,7 @@ from app.document_processing.document_processor import (
 
 from app.services.processing_repository import (
     save_processing_result,
+    save_processing_attempt_result,
     start_processing_attempt,
     complete_processing_attempt,
 )
@@ -45,7 +46,17 @@ def process_and_save_document(
         ).isoformat()
 
         # STEP 4:
-        # Save the successful extraction result.
+        # Save an immutable snapshot linked to this exact attempt.
+        #
+        # This preserves the original extraction independently of
+        # later processing attempts and human review decisions.
+        save_processing_attempt_result(
+            attempt_id=attempt_id,
+            extraction_data=extraction_result,
+        )
+
+        # STEP 5:
+        # Save the latest successful extraction result for the document.
         save_processing_result(
             document_id=document_id,
             extraction_data=extraction_result,
@@ -55,7 +66,7 @@ def process_and_save_document(
             error_message=None,
         )
 
-        # STEP 5:
+        # STEP 6:
         # Mark the processing attempt as completed.
         complete_processing_attempt(
             attempt_id=attempt_id,
