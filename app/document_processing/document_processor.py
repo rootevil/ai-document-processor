@@ -17,6 +17,10 @@ import logging
 
 from app.core.config import settings
 
+from app.document_processing.invoice_contract_adapter import (
+    build_invoice_extraction,
+)
+
 from app.document_processing.pdf_extractor import (
     extract_pdf_text,
     PDFExtractionError,
@@ -217,7 +221,6 @@ def process_document(file_path: Path) -> dict:
                     "error": None,
                 }
 
-
             except AIExtractionError as exc:
 
                 # Log the actual AI failure for debugging.
@@ -236,6 +239,21 @@ def process_document(file_path: Path) -> dict:
                     "comparison": None,
                     "error": "AI extraction could not be completed",
                 }
+
+        # STEP 8:
+        # Always build the shared invoice contract from rule-based extraction.
+        #
+        # This runs whether AI is disabled, successful, or has failed.
+        # Rule-based extraction remains the canonical result for now.
+        invoice_extraction = build_invoice_extraction(
+            extraction_result
+        )
+
+        # Convert the Pydantic model into JSON-compatible Python data
+        # so the existing SQLite persistence can store it.
+        extraction_result["invoice_extraction"] = (
+            invoice_extraction.model_dump(mode="json")
+        )
 
 
     except (

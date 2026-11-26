@@ -368,3 +368,84 @@ def test_process_document_with_changed_file_size_returns_conflict(
     assert response.json() == {
         "detail": "Stored document size does not match its recorded metadata"
     }
+
+def test_process_uploaded_pdf_returns_invoice_contract(
+    tmp_path,
+    monkeypatch,
+):
+    """The processing API should expose the shared invoice contract."""
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(
+        settings,
+        "ai_extraction_enabled",
+        False,
+    )
+
+    upload_dir = tmp_path / "uploads"
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.upload_dir",
+        upload_dir,
+    )
+
+    monkeypatch.setattr(
+        "app.api.documents.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    pdf_path = tmp_path / "sample_invoice.pdf"
+    create_sample_pdf(pdf_path)
+
+    upload_response = client.post(
+        "/api/v1/documents/upload",
+        files={
+            "file": (
+                "sample_invoice.pdf",
+                pdf_path.read_bytes(),
+                "application/pdf",
+            )
+        },
+    )
+
+    assert upload_response.status_code == 200
+
+    document_id = upload_response.json()["id"]
+
+    process_response = client.post(
+        f"/api/v1/documents/{document_id}/process"
+    )
+
+    assert process_response.status_code == 200
+
+    extraction = process_response.json()["extraction"]
+
+    # Existing processor output must remain available.
+    assert extraction["business_fields"]["document_type"] == "invoice"
+    assert extraction["normalized_business_fields"] is not None
+
+    # The new shared contract must also be available.
+    assert "invoice_extraction" in extraction
+
+    invoice = extraction["invoice_extraction"]
+
+    assert invoice["document_type"] == "invoice"
+
+    assert (
+        invoice["fields"]["invoice_number"]["value"]
+        == "INV-1001"
+    )
+
+    assert (
+        invoice["fields"]["invoice_number"]["source"]
+        == "rule_based"
+    )
+
+    assert (
+        invoice["fields"]["invoice_number"]["references"][0]
+        ["page_number"]
+        == 1
+    )
