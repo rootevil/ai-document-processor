@@ -25,6 +25,9 @@ from app.document_processing.business_field_extractor import (
     extract_invoice_fields,
     BusinessFieldExtractionError,
 )
+from app.document_processing.value_normalizer import (
+    normalize_business_fields,
+)
 
 
 def test_extract_invoice_fields_from_pdf(tmp_path):
@@ -119,6 +122,84 @@ def test_missing_invoice_fields_return_none(tmp_path):
     assert fields["tax_amount"]["value"] is None
 
     assert fields["currency"]["value"] is None
+
+
+def test_extract_fields_from_multiline_receipt_pdf():
+    """Recognize values on the line after their PDF labels."""
+
+    extraction_result = {
+        "source_filename": "vercel_receipt.pdf",
+        "file_type": "pdf",
+        "sections": [
+            {
+                "section_type": "page",
+                "section_name": "1",
+                "content": {
+                    "text": (
+                        "Receipt\n"
+                        "Invoice number\n"
+                        "GS0VG4VQ-0001\n"
+                        "Date paid\n"
+                        "August 24, 2026\n"
+                        "Vercel Inc.\n"
+                        "Bill to\n"
+                        "rootevil's projects\n"
+                        "Subtotal\n"
+                        "$11.25\n"
+                        "Total\n"
+                        "$11.25\n"
+                        "Credited total\n"
+                        "-$11.25\n"
+                        "Adjusted invoice total\n"
+                        "$0.00"
+                    )
+                },
+                "references": [
+                    {"type": "page", "page_number": 1}
+                ],
+            }
+        ],
+    }
+
+    result = extract_invoice_fields(extraction_result)
+    fields = result["fields"]
+
+    assert fields["invoice_number"]["value"] == "GS0VG4VQ-0001"
+    assert fields["vendor_name"]["value"] == "Vercel Inc."
+    assert fields["customer_name"]["value"] == "rootevil's projects"
+    assert fields["subtotal"]["value"] == "$11.25"
+    assert fields["total_amount"]["value"] == "$11.25"
+    assert fields["currency"]["value"] == "$"
+    # A payment date is not necessarily the invoice issue date.
+    assert fields["invoice_date"]["value"] is None
+    # The credited/adjusted total must not replace the invoice total.
+    assert fields["total_amount"]["value"] != "$0.00"
+    assert fields["invoice_number"]["references"] == [
+        {"type": "page", "page_number": 1}
+    ]
+
+    normalized = normalize_business_fields(result)
+    assert normalized["fields"]["currency"]["normalization_status"] == "needs_review"
+
+
+def test_currency_code_next_to_amount_is_extracted():
+    extraction_result = {
+        "source_filename": "usd_invoice.pdf",
+        "file_type": "pdf",
+        "sections": [
+            {
+                "section_type": "page",
+                "section_name": "1",
+                "content": {"text": "Invoice number: INV-200\nTotal: USD 25.00"},
+                "references": [{"type": "page", "page_number": 1}],
+            }
+        ],
+    }
+
+    result = extract_invoice_fields(extraction_result)
+
+    assert result["fields"]["total_amount"]["value"] == "USD 25.00"
+    assert result["fields"]["currency"]["value"] == "USD"
 
 
 def test_all_supported_invoice_fields_are_returned(tmp_path):

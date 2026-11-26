@@ -160,3 +160,157 @@ def test_process_invalid_pdf(tmp_path):
     with pytest.raises(DocumentProcessingError):
 
         process_document(pdf_path)
+
+def test_ai_extraction_is_disabled_by_default(
+    tmp_path,
+    monkeypatch,
+):
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(
+        settings,
+        "ai_extraction_enabled",
+        False,
+    )
+
+    pdf_path = tmp_path / "sample_invoice.pdf"
+
+    create_sample_pdf(pdf_path)
+
+    result = process_document(pdf_path)
+
+    assert result["ai_extraction"]["status"] == "disabled"
+
+    assert result["ai_extraction"]["fields"] is None
+
+
+def test_ai_extraction_is_integrated(
+    tmp_path,
+    monkeypatch,
+):
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(
+        settings,
+        "ai_extraction_enabled",
+        True,
+    )
+
+    def mock_ai_extraction(extraction_result):
+
+        return {
+            "document_type": "invoice",
+            "fields": {
+                "invoice_number": {
+                    "value": "INV-1001",
+                    "references": [],
+                },
+                "invoice_date": {
+                    "value": "2026-11-24",
+                    "references": [],
+                },
+                "due_date": {
+                    "value": None,
+                    "references": [],
+                },
+                "vendor_name": {
+                    "value": None,
+                    "references": [],
+                },
+                "customer_name": {
+                    "value": None,
+                    "references": [],
+                },
+                "subtotal": {
+                    "value": 1000,
+                    "references": [],
+                },
+                "tax_amount": {
+                    "value": None,
+                    "references": [],
+                },
+                "total_amount": {
+                    "value": 1150,
+                    "references": [],
+                },
+                "currency": {
+                    "value": None,
+                    "references": [],
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.document_processing.document_processor."
+        "extract_invoice_fields_with_ai",
+        mock_ai_extraction,
+    )
+
+    pdf_path = tmp_path / "sample_invoice.pdf"
+
+    create_sample_pdf(pdf_path)
+
+    result = process_document(pdf_path)
+
+    assert result["ai_extraction"]["status"] == "completed"
+
+    assert (
+        result["ai_extraction"]["fields"]["fields"]
+        ["invoice_number"]["value"]
+        == "INV-1001"
+    )
+
+    assert (
+        result["ai_extraction"]["comparison"]
+        ["invoice_number"]["status"]
+        == "matched"
+    )
+
+
+def test_ai_failure_does_not_break_document_processing(
+    tmp_path,
+    monkeypatch,
+):
+
+    from app.core.config import settings
+
+    from app.document_processing.ai_extraction_service import (
+        AIExtractionError,
+    )
+
+    monkeypatch.setattr(
+        settings,
+        "ai_extraction_enabled",
+        True,
+    )
+
+    def mock_ai_failure(extraction_result):
+
+        raise AIExtractionError(
+            "Ollama unavailable"
+        )
+
+    monkeypatch.setattr(
+        "app.document_processing.document_processor."
+        "extract_invoice_fields_with_ai",
+        mock_ai_failure,
+    )
+
+    pdf_path = tmp_path / "sample_invoice.pdf"
+
+    create_sample_pdf(pdf_path)
+
+    result = process_document(pdf_path)
+
+    assert result["ai_extraction"]["status"] == "failed"
+
+    assert result["ai_extraction"]["fields"] is None
+
+    # Rule-based extraction must still work.
+    assert (
+        result["business_fields"]["fields"]
+        ["invoice_number"]["value"]
+        == "INV-1001"
+    )

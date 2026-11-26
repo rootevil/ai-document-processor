@@ -61,7 +61,8 @@ PDF_FIELD_PATTERNS = {
     ),
 
     "invoice_date": re.compile(
-        r"^\s*(?:invoice\s+date|date\s+of\s+issue|issue\s+date)"
+        r"^\s*(?:invoice\s+date|date\s+of\s+issue|issue\s+date|"
+        r"date\s+issued|issued\s+on)"
         r"\s*[:\-]\s*(.*?)\s*$",
         re.IGNORECASE,
     ),
@@ -74,13 +75,15 @@ PDF_FIELD_PATTERNS = {
 
     "vendor_name": re.compile(
         r"^\s*(?:vendor(?:\s+name)?|supplier(?:\s+name)?|"
-        r"seller(?:\s+name)?)"
+        r"seller(?:\s+name)?|from|billed\s+by|sold\s+by|issued\s+by|"
+        r"provided\s+by)"
         r"\s*[:\-]\s*(.*?)\s*$",
         re.IGNORECASE,
     ),
 
     "customer_name": re.compile(
-        r"^\s*(?:customer(?:\s+name)?|client(?:\s+name)?|bill\s+to)"
+        r"^\s*(?:customer(?:\s+name)?|client(?:\s+name)?|"
+        r"bill(?:ed)?\s+to|sold\s+to)"
         r"\s*[:\-]\s*(.*?)\s*$",
         re.IGNORECASE,
     ),
@@ -92,14 +95,15 @@ PDF_FIELD_PATTERNS = {
     ),
 
     "tax_amount": re.compile(
-        r"^\s*(?:tax(?:\s+amount)?|vat|sales\s+tax)"
+        r"^\s*(?:tax(?:\s+amount)?|vat|gst|sales\s+tax|"
+        r"goods\s+and\s+services\s+tax)"
         r"\s*[:\-]\s*(.*?)\s*$",
         re.IGNORECASE,
     ),
 
     "total_amount": re.compile(
         r"^\s*(?:grand\s+total|invoice\s+total|total\s+amount|"
-        r"amount\s+due|total)"
+        r"amount\s+due|total\s+due|total\s+payable|amount\s+payable|total)"
         r"\s*[:\-]\s*(.*?)\s*$",
         re.IGNORECASE,
     ),
@@ -108,6 +112,59 @@ PDF_FIELD_PATTERNS = {
         r"^\s*currency\s*[:\-]\s*(.*?)\s*$",
         re.IGNORECASE,
     ),
+}
+
+
+# PDF text extraction often places a recognized label on one line and
+# its value on the next. These exact normalized labels let us support
+# that layout without treating unrelated lines such as "Date paid" as
+# an invoice date.
+PDF_LABEL_TO_FIELD = {
+    "invoice number": "invoice_number",
+    "invoice no": "invoice_number",
+    "invoice id": "invoice_number",
+    "invoice date": "invoice_date",
+    "date of issue": "invoice_date",
+    "issue date": "invoice_date",
+    "date issued": "invoice_date",
+    "issued on": "invoice_date",
+    "due date": "due_date",
+    "payment due": "due_date",
+    "vendor": "vendor_name",
+    "vendor name": "vendor_name",
+    "supplier": "vendor_name",
+    "supplier name": "vendor_name",
+    "seller": "vendor_name",
+    "seller name": "vendor_name",
+    "from": "vendor_name",
+    "billed by": "vendor_name",
+    "sold by": "vendor_name",
+    "issued by": "vendor_name",
+    "provided by": "vendor_name",
+    "customer": "customer_name",
+    "customer name": "customer_name",
+    "client": "customer_name",
+    "client name": "customer_name",
+    "bill to": "customer_name",
+    "billed to": "customer_name",
+    "sold to": "customer_name",
+    "subtotal": "subtotal",
+    "sub total": "subtotal",
+    "tax": "tax_amount",
+    "tax amount": "tax_amount",
+    "vat": "tax_amount",
+    "gst": "tax_amount",
+    "sales tax": "tax_amount",
+    "goods and services tax": "tax_amount",
+    "total": "total_amount",
+    "grand total": "total_amount",
+    "invoice total": "total_amount",
+    "total amount": "total_amount",
+    "amount due": "total_amount",
+    "total due": "total_amount",
+    "total payable": "total_amount",
+    "amount payable": "total_amount",
+    "currency": "currency",
 }
 
 
@@ -262,6 +319,89 @@ def get_page_number(section: dict):
         return None
 
 
+BUSINESS_NAME_SUFFIX = re.compile(
+    r"(?:\b(?:incorporated|inc\.?|llc|l\.l\.c\.|limited|ltd\.?|"
+    r"corporation|corp\.?|gmbh|plc|llp|l\.l\.p\.|"
+    r"pty\s+ltd\.?|company|co\.)\s*)$",
+    re.IGNORECASE,
+)
+
+CURRENCY_CODES = "USD|EUR|GBP|PKR|INR|AED|CAD|AUD|JPY|CNY|CHF"
+CURRENCY_SYMBOLS = "$€£¥₹₨"
+
+
+def infer_header_vendor_name(lines: list[str]) -> str | None:
+    """Use a narrow legal-suffix rule for an unlabeled issuer header.
+
+    Only scan before the first buyer label and only accept recognizable
+    legal entity suffixes. This avoids treating arbitrary document text
+    or the customer block as the vendor.
+    """
+
+    buyer_labels = {
+        field_label
+        for field_label, field_name in PDF_LABEL_TO_FIELD.items()
+        if field_name == "customer_name"
+    }
+
+    buyer_start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if normalize_field_label(line) in buyer_labels
+        ),
+        len(lines),
+    )
+
+    for line in lines[:buyer_start]:
+        candidate = line.strip()
+        if BUSINESS_NAME_SUFFIX.search(candidate):
+            return candidate
+
+    return None
+
+
+def extract_currency_marker(line: str) -> str | None:
+    """Return an explicit currency code or symbol attached to an amount.
+
+    Dollar, yen, and rupee symbols remain symbols because they can map to
+    multiple currencies; the normalizer marks those values for review.
+    """
+
+    code_before_amount = re.search(
+        rf"\b(?P<code>{CURRENCY_CODES})\b"
+        rf"(?:\s+|[{re.escape(CURRENCY_SYMBOLS)}]\s*)[-+]?\d",
+        line,
+        re.IGNORECASE,
+    )
+    if code_before_amount:
+        return code_before_amount.group("code").upper()
+
+    code_after_amount = re.search(
+        rf"[-+]?\d[\d.,]*\s+(?P<code>{CURRENCY_CODES})\b",
+        line,
+        re.IGNORECASE,
+    )
+    if code_after_amount:
+        return code_after_amount.group("code").upper()
+
+    symbol_before_amount = re.search(
+        rf"(?P<symbol>[{re.escape(CURRENCY_SYMBOLS)}])\s*[-+]?\d",
+        line,
+    )
+    if symbol_before_amount:
+        return symbol_before_amount.group("symbol")
+
+    symbol_after_amount = re.search(
+        rf"[-+]?\d[\d.,]*\s*(?P<symbol>[{re.escape(CURRENCY_SYMBOLS)}])",
+        line,
+    )
+    if symbol_after_amount:
+        return symbol_after_amount.group("symbol")
+
+    return None
+
+
 def extract_pdf_invoice_fields(sections: list[dict]) -> dict:
     """
     Extract invoice fields from PDF page sections.
@@ -273,6 +413,7 @@ def extract_pdf_invoice_fields(sections: list[dict]) -> dict:
     """
 
     fields = create_empty_invoice_fields()
+    currency_candidates = {}
 
     for section in sections:
 
@@ -300,8 +441,21 @@ def extract_pdf_invoice_fields(sections: list[dict]) -> dict:
         if page_number is None:
             continue
 
-        # Process the page line by line.
-        for line in page_text.splitlines():
+        # Process the page line by line. Keep the original lines so
+        # label/value pairs on separate lines can retain page references.
+        lines = page_text.splitlines()
+
+        for line_index, line in enumerate(lines):
+
+            currency_marker = extract_currency_marker(line)
+            if currency_marker is not None:
+                currency_candidates.setdefault(
+                    currency_marker,
+                    {
+                        "type": "page",
+                        "page_number": page_number,
+                    },
+                )
 
             # Check every supported invoice field.
             for field_name, pattern in PDF_FIELD_PATTERNS.items():
@@ -325,6 +479,65 @@ def extract_pdf_invoice_fields(sections: list[dict]) -> dict:
                     value=extracted_value,
                     reference=reference,
                 )
+
+            # Some PDFs put a bare field label on one line and its value
+            # on the next (for example, "Invoice number" then "INV-1001").
+            normalized_label = normalize_field_label(line)
+            field_name = PDF_LABEL_TO_FIELD.get(normalized_label)
+
+            if field_name is None or fields[field_name]["value"] is not None:
+                continue
+
+            next_index = line_index + 1
+            while next_index < len(lines) and not lines[next_index].strip():
+                next_index += 1
+
+            if next_index >= len(lines):
+                continue
+
+            next_line = lines[next_index].strip()
+
+            # Don't consume another recognized label as this field's value.
+            if normalize_field_label(next_line) in PDF_LABEL_TO_FIELD:
+                continue
+
+            reference = {
+                "type": "page",
+                "page_number": page_number,
+            }
+
+            set_extracted_field(
+                fields=fields,
+                field_name=field_name,
+                value=next_line,
+                reference=reference,
+            )
+
+        # Many invoices show the issuer as a company name in the header
+        # without a "Vendor" label. Use a conservative legal-suffix rule.
+        if fields["vendor_name"]["value"] is None:
+            vendor_name = infer_header_vendor_name(lines)
+            if vendor_name is not None:
+                set_extracted_field(
+                    fields=fields,
+                    field_name="vendor_name",
+                    value=vendor_name,
+                    reference={
+                        "type": "page",
+                        "page_number": page_number,
+                    },
+                )
+
+    # Keep a currency marker only when the document contains one
+    # consistent marker. Ambiguous symbols are preserved for review.
+    if fields["currency"]["value"] is None and len(currency_candidates) == 1:
+        currency_marker, reference = next(iter(currency_candidates.items()))
+        set_extracted_field(
+            fields=fields,
+            field_name="currency",
+            value=currency_marker,
+            reference=reference,
+        )
 
     return fields
 

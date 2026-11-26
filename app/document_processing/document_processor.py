@@ -1,4 +1,3 @@
-
 """
 Main document-processing module.
 
@@ -6,15 +5,17 @@ Responsibilities:
 1. Identify supported document formats.
 2. Extract raw PDF or Excel contents.
 3. Convert extracted contents into a unified structure.
-4. Extract meaningful invoice business fields.
-5. Preserve original document references.
-
-Supported formats:
-    - PDF
-    - XLSX
+4. Extract business fields using rule-based extraction.
+5. Normalize extracted business values.
+6. Optionally extract business fields using AI.
+7. Compare rule-based and AI results.
+8. Preserve original document references.
 """
 
 from pathlib import Path
+import logging
+
+from app.core.config import settings
 
 from app.document_processing.pdf_extractor import (
     extract_pdf_text,
@@ -31,14 +32,17 @@ from app.document_processing.business_field_extractor import (
     BusinessFieldExtractionError,
 )
 
-# Import the value-normalization layer.
-#
-# This module standardizes extracted business values
-# without modifying the original extraction result.
 from app.document_processing.value_normalizer import (
     normalize_business_fields,
     BusinessFieldNormalizationError,
 )
+
+from app.document_processing.ai_extraction_service import (
+    extract_invoice_fields_with_ai,
+    compare_business_fields,
+    AIExtractionError,
+)
+
 
 class DocumentProcessingError(Exception):
     """Raised when document processing fails."""
@@ -48,16 +52,15 @@ def process_document(file_path: Path) -> dict:
     """
     Process a supported document and return a unified result.
 
-    The function first extracts the original document contents.
+    Rule-based extraction remains the primary extraction layer.
 
-    It then performs business-field extraction using the
-    unified result produced by the raw extraction layer.
+    AI extraction is optional and controlled by application settings.
 
-    Original sections and references are preserved.
+    AI failures do not prevent successful raw document processing.
     """
 
     # STEP 1:
-    # Confirm that the requested document exists.
+    # Confirm that the document exists.
     if not file_path.is_file():
 
         raise DocumentProcessingError(
@@ -69,7 +72,7 @@ def process_document(file_path: Path) -> dict:
     try:
 
         # STEP 2:
-        # Process PDF documents.
+        # Extract PDF content.
         if extension == ".pdf":
 
             extracted_pages = extract_pdf_text(file_path)
@@ -103,7 +106,7 @@ def process_document(file_path: Path) -> dict:
             }
 
         # STEP 3:
-        # Process Excel documents.
+        # Extract Excel content.
         elif extension == ".xlsx":
 
             extracted_sheets = extract_excel_data(file_path)
@@ -148,44 +151,93 @@ def process_document(file_path: Path) -> dict:
                 "sections": sections,
             }
 
-        # STEP 4:
-        # Reject unsupported document formats.
         else:
 
             raise DocumentProcessingError(
                 f"Unsupported document format: {extension}"
             )
 
-       # STEP 5:
-       # Extract meaningful business fields from the document.
+        # STEP 4:
+        # Extract business fields using existing rules.
         business_fields = extract_invoice_fields(
             extraction_result
         )
 
-        # STEP 6:
-        # Normalize the extracted business values.
-        #
-        # The original business_fields structure is preserved.
-        # The normalizer creates a separate result containing
-        # both original and standardized values.
+        # STEP 5:
+        # Normalize rule-based business fields.
         normalized_business_fields = normalize_business_fields(
             business_fields
         )
 
-        # STEP 7:
-        # Store both extraction results.
-        #
-        # business_fields:
-        #     Original values extracted from the document.
-        #
-        # normalized_business_fields:
-        # Standardized values with normalization statuses.
         extraction_result["business_fields"] = business_fields
 
         extraction_result["normalized_business_fields"] = (
             normalized_business_fields
         )
 
+        # STEP 6:
+        # Initialize the AI result as disabled.
+        #
+        # This ensures the document processor works even when
+        # Ollama is not running or AI extraction is disabled.
+        extraction_result["ai_extraction"] = {
+            "status": "disabled",
+            "fields": None,
+            "normalized_fields": None,
+            "comparison": None,
+            "error": None,
+        }
+
+        # STEP 7:
+        # Run AI extraction only when explicitly enabled.
+        if settings.ai_extraction_enabled:
+
+            try:
+
+                ai_fields = extract_invoice_fields_with_ai(
+                    extraction_result
+                )
+
+                # Normalize the AI result separately.
+                normalized_ai_fields = normalize_business_fields(
+                    ai_fields
+                )
+
+                # Compare AI results against rule-based results.
+                comparison = compare_business_fields(
+                    business_fields,
+                    ai_fields,
+                )
+
+                extraction_result["ai_extraction"] = {
+                    "status": "completed",
+                    "fields": ai_fields,
+                    "normalized_fields": normalized_ai_fields,
+                    "comparison": comparison,
+                    "error": None,
+                }
+
+
+            except AIExtractionError as exc:
+
+                # Log the actual AI failure for debugging.
+                # This helps identify whether the issue is related
+                # to Ollama, JSON parsing, or response validation.
+
+                logging.exception(
+                    "AI invoice extraction failed: %s",
+                    exc,
+                )
+
+                extraction_result["ai_extraction"] = {
+                    "status": "failed",
+                    "fields": None,
+                    "normalized_fields": None,
+                    "comparison": None,
+                    "error": "AI extraction could not be completed",
+                }
+
+
     except (
         PDFExtractionError,
         ExcelExtractionError,
@@ -198,26 +250,7 @@ def process_document(file_path: Path) -> dict:
         ) from exc
 
     except DocumentProcessingError:
-        raise
 
-    except Exception as exc:
-
-        raise DocumentProcessingError(
-            "Unable to process document"
-        ) from exc
-
-    except (
-        PDFExtractionError,
-        ExcelExtractionError,
-        BusinessFieldExtractionError,
-        BusinessFieldNormalizationError,
-    ) as exc:
-
-        raise DocumentProcessingError(
-            str(exc)
-        ) from exc
-
-    except DocumentProcessingError:
         raise
 
     except Exception as exc:
@@ -227,10 +260,5 @@ def process_document(file_path: Path) -> dict:
         ) from exc
 
     # STEP 8:
-    # Return the complete extraction result.
-    #
-    # This includes:
-    # 1. Original document sections.
-    # 2. Original extracted business fields.
-    # 3. Normalized business fields.
+    # Return the complete processing result.
     return extraction_result
