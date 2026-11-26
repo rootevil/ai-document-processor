@@ -35,7 +35,14 @@ def test_process_pdf_document(tmp_path):
     assert first_page["references"][0]["page_number"] == 1
 
     assert "INV-1001" in first_page["content"]["text"]
+    
+    # Verify that business-field extraction is integrated.
+    assert result["business_fields"]["document_type"] == "invoice"
 
+    assert (
+        result["business_fields"]["fields"]["invoice_number"]["value"]
+        == "INV-1001"
+    )
 
 def test_process_excel_document(tmp_path):
 
@@ -69,6 +76,13 @@ def test_process_excel_document(tmp_path):
 
     assert invoice_number_reference["column_number"] == 2
 
+    # Verify that Excel business-field extraction is integrated.
+    assert result["business_fields"]["document_type"] == "invoice"
+
+    assert (
+        result["business_fields"]["fields"]["customer_name"]["value"]
+        == "ABC Technologies"
+    )
 
 def test_process_unsupported_document(tmp_path):
 

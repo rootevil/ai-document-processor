@@ -1,4 +1,19 @@
 
+"""
+Main document-processing module.
+
+Responsibilities:
+1. Identify supported document formats.
+2. Extract raw PDF or Excel contents.
+3. Convert extracted contents into a unified structure.
+4. Extract meaningful invoice business fields.
+5. Preserve original document references.
+
+Supported formats:
+    - PDF
+    - XLSX
+"""
+
 from pathlib import Path
 
 from app.document_processing.pdf_extractor import (
@@ -11,6 +26,11 @@ from app.document_processing.excel_extractor import (
     ExcelExtractionError,
 )
 
+from app.document_processing.business_field_extractor import (
+    extract_invoice_fields,
+    BusinessFieldExtractionError,
+)
+
 
 class DocumentProcessingError(Exception):
     """Raised when document processing fails."""
@@ -18,15 +38,20 @@ class DocumentProcessingError(Exception):
 
 def process_document(file_path: Path) -> dict:
     """
-    Process a supported document and return
-    a unified extraction result.
+    Process a supported document and return a unified result.
 
-    Supported formats:
-    - PDF
-    - XLSX
+    The function first extracts the original document contents.
+
+    It then performs business-field extraction using the
+    unified result produced by the raw extraction layer.
+
+    Original sections and references are preserved.
     """
 
+    # STEP 1:
+    # Confirm that the requested document exists.
     if not file_path.is_file():
+
         raise DocumentProcessingError(
             "Document file not found"
         )
@@ -35,6 +60,8 @@ def process_document(file_path: Path) -> dict:
 
     try:
 
+        # STEP 2:
+        # Process PDF documents.
         if extension == ".pdf":
 
             extracted_pages = extract_pdf_text(file_path)
@@ -61,12 +88,14 @@ def process_document(file_path: Path) -> dict:
                     }
                 )
 
-            return {
+            extraction_result = {
                 "source_filename": file_path.name,
                 "file_type": "pdf",
                 "sections": sections,
             }
 
+        # STEP 3:
+        # Process Excel documents.
         elif extension == ".xlsx":
 
             extracted_sheets = extract_excel_data(file_path)
@@ -105,21 +134,39 @@ def process_document(file_path: Path) -> dict:
                     }
                 )
 
-            return {
+            extraction_result = {
                 "source_filename": file_path.name,
                 "file_type": "xlsx",
                 "sections": sections,
             }
 
+        # STEP 4:
+        # Reject unsupported document formats.
         else:
 
             raise DocumentProcessingError(
                 f"Unsupported document format: {extension}"
             )
 
+        # STEP 5:
+        # Extract meaningful invoice fields.
+        #
+        # This adds business information without replacing
+        # the original extracted pages or worksheets.
+        business_fields = extract_invoice_fields(
+            extraction_result
+        )
+
+        extraction_result["business_fields"] = business_fields
+
+        # STEP 6:
+        # Return the complete extraction result.
+        return extraction_result
+
     except (
         PDFExtractionError,
         ExcelExtractionError,
+        BusinessFieldExtractionError,
     ) as exc:
 
         raise DocumentProcessingError(
