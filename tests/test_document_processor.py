@@ -44,6 +44,30 @@ def test_process_pdf_document(tmp_path):
         == "INV-1001"
     )
 
+    # Verify normalized business fields are included.
+    normalized_fields = result["normalized_business_fields"]["fields"]
+
+    # The original extracted value must remain unchanged.
+    assert (
+        result["business_fields"]["fields"]["invoice_date"]["value"]
+        == "2026-11-24"
+    )
+
+    # The normalized date must use ISO format.
+    assert normalized_fields["invoice_date"]["normalized_value"] == (
+        "2026-11-24"
+    )
+
+    # Verify monetary amount normalization.
+    assert normalized_fields["total_amount"]["normalized_value"] == (
+        "1150"
+    )
+
+    # Verify the normalization status.
+    assert normalized_fields["total_amount"]["normalization_status"] == (
+        "normalized"
+    )
+
 def test_process_excel_document(tmp_path):
 
     excel_path = tmp_path / "sample_invoice.xlsx"
@@ -83,6 +107,25 @@ def test_process_excel_document(tmp_path):
         result["business_fields"]["fields"]["customer_name"]["value"]
         == "ABC Technologies"
     )
+
+    # Verify that normalized business fields are included.
+    normalized_fields = result["normalized_business_fields"]["fields"]
+
+    # Verify customer-name cleanup.
+    assert normalized_fields["customer_name"]["normalized_value"] == (
+        "ABC Technologies"
+    )
+
+    assert normalized_fields["customer_name"]["normalization_status"] == (
+        "normalized"
+    )
+
+    # Verify that the original Excel cell reference is retained.
+    assert normalized_fields["customer_name"]["references"][0] == {
+        "type": "cell",
+        "worksheet_name": "Customer Details",
+        "cell_reference": "B1",
+    }
 
 def test_process_unsupported_document(tmp_path):
 

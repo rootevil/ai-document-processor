@@ -31,6 +31,14 @@ from app.document_processing.business_field_extractor import (
     BusinessFieldExtractionError,
 )
 
+# Import the value-normalization layer.
+#
+# This module standardizes extracted business values
+# without modifying the original extraction result.
+from app.document_processing.value_normalizer import (
+    normalize_business_fields,
+    BusinessFieldNormalizationError,
+)
 
 class DocumentProcessingError(Exception):
     """Raised when document processing fails."""
@@ -148,25 +156,41 @@ def process_document(file_path: Path) -> dict:
                 f"Unsupported document format: {extension}"
             )
 
-        # STEP 5:
-        # Extract meaningful invoice fields.
-        #
-        # This adds business information without replacing
-        # the original extracted pages or worksheets.
+       # STEP 5:
+       # Extract meaningful business fields from the document.
         business_fields = extract_invoice_fields(
             extraction_result
         )
 
+        # STEP 6:
+        # Normalize the extracted business values.
+        #
+        # The original business_fields structure is preserved.
+        # The normalizer creates a separate result containing
+        # both original and standardized values.
+        normalized_business_fields = normalize_business_fields(
+            business_fields
+        )
+
+        # STEP 7:
+        # Store both extraction results.
+        #
+        # business_fields:
+        #     Original values extracted from the document.
+        #
+        # normalized_business_fields:
+        # Standardized values with normalization statuses.
         extraction_result["business_fields"] = business_fields
 
-        # STEP 6:
-        # Return the complete extraction result.
-        return extraction_result
+        extraction_result["normalized_business_fields"] = (
+            normalized_business_fields
+        )
 
     except (
         PDFExtractionError,
         ExcelExtractionError,
         BusinessFieldExtractionError,
+        BusinessFieldNormalizationError,
     ) as exc:
 
         raise DocumentProcessingError(
@@ -181,3 +205,32 @@ def process_document(file_path: Path) -> dict:
         raise DocumentProcessingError(
             "Unable to process document"
         ) from exc
+
+    except (
+        PDFExtractionError,
+        ExcelExtractionError,
+        BusinessFieldExtractionError,
+        BusinessFieldNormalizationError,
+    ) as exc:
+
+        raise DocumentProcessingError(
+            str(exc)
+        ) from exc
+
+    except DocumentProcessingError:
+        raise
+
+    except Exception as exc:
+
+        raise DocumentProcessingError(
+            "Unable to process document"
+        ) from exc
+
+    # STEP 8:
+    # Return the complete extraction result.
+    #
+    # This includes:
+    # 1. Original document sections.
+    # 2. Original extracted business fields.
+    # 3. Normalized business fields.
+    return extraction_result
