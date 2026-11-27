@@ -18,7 +18,33 @@ export const invoiceFieldReviewRequestSchema = z.object({
     z.number(),
     z.null(),
   ]).optional(),
+}).superRefine((review, context) => {
+  const hasCorrectedValue =
+    review.corrected_value !== undefined
+
+  if (
+    review.decision === 'corrected' &&
+    !hasCorrectedValue
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['corrected_value'],
+      message: 'A corrected value is required for corrected decisions.',
+    })
+  }
+
+  if (
+    review.decision !== 'corrected' &&
+    hasCorrectedValue
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['corrected_value'],
+      message: 'Corrected value must only be supplied for corrected decisions.',
+    })
+  }
 })
+
 
 export const reviewEventSchema = z.object({
   review_id: z.string(),

@@ -44,11 +44,19 @@ export interface LatestReviewsResponse {
   reviews: Record<string, ReviewEvent>
 }
 
+/**
+ * Represents one field after applying human review decisions.
+ *
+ * Original and effective values are optional to match
+ * the frontend validation schema.
+ */
 export interface ReviewAwareField {
-  original_value: unknown
-  effective_value: unknown
+  original_value?: unknown
+  effective_value?: unknown
   review_status: ReviewStatus
   latest_review: ReviewEvent | null
+
+  // Preserve additional extraction metadata returned by the backend.
   [key: string]: unknown
 }
 
