@@ -420,9 +420,17 @@ def test_process_uploaded_pdf_returns_invoice_contract(
     )
 
     assert process_response.status_code == 200
+    process_data = process_response.json()
 
-    extraction = process_response.json()["extraction"]
+    # The frontend needs these identifiers to open the review workflow.
+    assert process_data["document_id"] == document_id
+    assert isinstance(process_data["attempt_id"], str)
+    assert process_data["attempt_id"]
 
+    assert process_data["attempt_number"] == 1
+
+    extraction = process_data["extraction"]
+    
     # Existing processor output must remain available.
     assert extraction["business_fields"]["document_type"] == "invoice"
     assert extraction["normalized_business_fields"] is not None

@@ -257,11 +257,12 @@ def process_uploaded_document(document_id: str):
     # Return the result after successful persistence.
     return {
         "document_id": document.id,
+        "attempt_id": processing_result["attempt_id"],
+        "attempt_number": processing_result["attempt_number"],
         "original_filename": document.original_filename,
         "status": processing_result["status"],
         "extraction": processing_result["extraction"],
     }
-
 
 @router.get("/{document_id}/result")
 def retrieve_processing_result(document_id: str):
