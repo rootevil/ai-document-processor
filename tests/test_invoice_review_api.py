@@ -393,3 +393,104 @@ def test_review_endpoint_rejects_nonexistent_attempt(
     )
 
     assert response.status_code == 404
+
+
+def test_retrieve_review_aware_extraction(
+    tmp_path,
+    monkeypatch,
+):
+    """The API must return original and effective values together."""
+
+    from app.services.processing_repository import (
+        record_invoice_field_review,
+    )
+
+    document, attempt, extraction = create_review_context(
+        tmp_path,
+        monkeypatch,
+    )
+
+    attempt_id = attempt["attempt_id"]
+
+    # Approve the original invoice number.
+    record_invoice_field_review(
+        attempt_id=attempt_id,
+        field_name="invoice_number",
+        decision="approved",
+    )
+
+    # Correct the original total amount.
+    record_invoice_field_review(
+        attempt_id=attempt_id,
+        field_name="total_amount",
+        decision="corrected",
+        corrected_value=1250.00,
+    )
+
+    # Reject a field that has no original extracted value.
+    record_invoice_field_review(
+        attempt_id=attempt_id,
+        field_name="vendor_name",
+        decision="rejected",
+    )
+
+    response = client.get(
+        f"/api/v1/documents/{document.id}"
+        f"/attempts/{attempt_id}/review-aware-extraction"
+    )
+
+    assert response.status_code == 200
+
+    result = response.json()
+    fields = result["fields"]
+
+    assert result["attempt_id"] == attempt_id
+    assert result["document_type"] == "invoice"
+
+    # Approved: retain the original value.
+    assert fields["invoice_number"]["original_value"] == "INV-1001"
+    assert fields["invoice_number"]["effective_value"] == "INV-1001"
+    assert fields["invoice_number"]["review_status"] == "approved"
+
+    # Corrected: use the human replacement value.
+    assert fields["total_amount"]["original_value"] == 1200.00
+    assert fields["total_amount"]["effective_value"] == 1250.00
+    assert fields["total_amount"]["review_status"] == "corrected"
+
+    # Rejected: do not expose an effective value.
+    assert fields["vendor_name"]["original_value"] is None
+    assert fields["vendor_name"]["effective_value"] is None
+    assert fields["vendor_name"]["review_status"] == "rejected"
+
+    # Unreviewed field: retain its original prediction.
+    assert fields["customer_name"]["review_status"] == "pending"
+    assert fields["customer_name"]["effective_value"] is None
+
+    # Original extraction evidence must remain unchanged.
+    assert fields["invoice_number"]["normalized_value"] == "INV-1001"
+
+
+def test_review_aware_endpoint_rejects_another_documents_attempt(
+    tmp_path,
+    monkeypatch,
+):
+    """An attempt cannot be accessed through another document's URL."""
+
+    document, attempt, extraction = create_review_context(
+        tmp_path,
+        monkeypatch,
+    )
+
+    other_document = create_document_record(
+        original_filename="another.pdf",
+        stored_filename="another.pdf",
+        content_type="application/pdf",
+        file_size=1024,
+    )
+
+    response = client.get(
+        f"/api/v1/documents/{other_document.id}"
+        f"/attempts/{attempt['attempt_id']}/review-aware-extraction"
+    )
+
+    assert response.status_code == 404

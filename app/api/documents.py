@@ -22,7 +22,9 @@ from app.document_processing.document_processor import (
 
 from app.services.document_storage import save_document
 from app.services.document_validator import validate_document
-
+from app.services.invoice_review_service import (
+    get_review_aware_extraction,
+)
 from app.services.processing_repository import (
     get_processing_result,
     get_processing_history,
@@ -500,4 +502,44 @@ def retrieve_latest_invoice_field_reviews(
         "attempt_id": attempt_id,
         "total_fields_reviewed": len(latest_reviews),
         "reviews": latest_reviews,
+    }
+
+
+# =============================================================
+# REVIEW-AWARE EXTRACTION API
+# =============================================================
+
+@router.get(
+    "/{document_id}/attempts/{attempt_id}/review-aware-extraction",
+    summary="Retrieve Review-Aware Invoice Extraction",
+)
+def retrieve_review_aware_extraction_result(
+    document_id: str,
+    attempt_id: str,
+):
+    """
+    Retrieve the original extraction combined with human review decisions.
+
+    The original extraction remains immutable.
+    Effective values are calculated from the latest review decisions.
+    """
+
+    # Verify document ownership and ensure an extraction snapshot exists.
+    _get_reviewable_attempt(
+        document_id,
+        attempt_id,
+    )
+
+    # Build the derived result without modifying stored data.
+    result = get_review_aware_extraction(attempt_id)
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No extraction snapshot found for this attempt",
+        )
+
+    return {
+        "document_id": document_id,
+        **result,
     }
