@@ -494,3 +494,44 @@ def test_review_aware_endpoint_rejects_another_documents_attempt(
     )
 
     assert response.status_code == 404
+
+def test_review_cannot_be_submitted_without_extraction_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    """An attempt without an extraction snapshot must not accept reviews."""
+
+    monkeypatch.setattr(
+        "app.db.database.settings.database_path",
+        tmp_path / "document_ai.db",
+    )
+
+    initialize_database()
+
+    # Create a document and processing attempt.
+    document = create_document_record(
+        original_filename="invoice.pdf",
+        stored_filename="invoice.pdf",
+        content_type="application/pdf",
+        file_size=1024,
+    )
+
+    attempt = start_processing_attempt(document.id)
+
+    # Complete the attempt without saving an extraction snapshot.
+    complete_processing_attempt(
+        attempt_id=attempt["attempt_id"],
+        status="completed",
+    )
+
+    # Attempt to review a field that has never been extracted.
+    response = client.post(
+        review_url(document.id, attempt["attempt_id"]),
+        json={
+            "field_name": "invoice_number",
+            "decision": "approved",
+        },
+    )
+
+    # The API must reject the review because no extraction exists.
+    assert response.status_code == 404
