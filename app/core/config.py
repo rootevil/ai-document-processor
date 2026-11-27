@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     database_path: Path = Path("data/database/document_ai.db")
 
     # --------------------------------------------------
+    # Frontend / CORS configuration
+    # --------------------------------------------------
+
+    # Development frontend origin.
+    # Additional origins can be supplied through .env.
+    cors_allowed_origins: list[str] = [
+        "http://localhost:5173"
+    ]
+
+    # --------------------------------------------------
     # Ollama AI configuration
     # --------------------------------------------------
 

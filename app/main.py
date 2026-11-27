@@ -7,7 +7,7 @@ from app.api.routes import router
 from app.api.documents import router as documents_router
 from app.core.config import settings
 from app.db.database import initialize_database
-
+from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,4 +31,18 @@ app.include_router(
 app.include_router(
     documents_router,
     prefix=settings.api_v1_prefix,
+)
+
+# --------------------------------------------------
+# Frontend cross-origin access
+# --------------------------------------------------
+
+# Allow the configured frontend origins to communicate
+# with this backend during development and deployment.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )

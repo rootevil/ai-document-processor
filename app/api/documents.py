@@ -22,6 +22,13 @@ from app.document_processing.document_processor import (
 
 from app.services.document_storage import save_document
 from app.services.document_validator import validate_document
+from app.schemas.review_api import (
+    OriginalAttemptExtractionResponse,
+    ReviewSubmissionResponse,
+    ReviewHistoryResponse,
+    LatestReviewsResponse,
+    ReviewAwareExtractionResponse,
+)
 from app.services.invoice_review_service import (
     get_review_aware_extraction,
 )
@@ -391,6 +398,7 @@ def _get_reviewable_attempt(
 
 @router.get(
     "/{document_id}/attempts/{attempt_id}/extraction",
+    response_model=OriginalAttemptExtractionResponse,
     summary="Retrieve Original Attempt Extraction",
 )
 def retrieve_attempt_extraction(
@@ -410,6 +418,7 @@ def retrieve_attempt_extraction(
 @router.post(
     "/{document_id}/attempts/{attempt_id}/reviews",
     status_code=201,
+    response_model=ReviewSubmissionResponse,
     summary="Submit Invoice Field Review",
 )
 def submit_invoice_field_review(
@@ -457,6 +466,7 @@ def submit_invoice_field_review(
 
 @router.get(
     "/{document_id}/attempts/{attempt_id}/reviews",
+    response_model=ReviewHistoryResponse,
     summary="Retrieve Invoice Field Review History",
 )
 def retrieve_invoice_field_review_history(
@@ -482,6 +492,7 @@ def retrieve_invoice_field_review_history(
 
 @router.get(
     "/{document_id}/attempts/{attempt_id}/reviews/latest",
+    response_model=LatestReviewsResponse,
     summary="Retrieve Latest Invoice Field Reviews",
 )
 def retrieve_latest_invoice_field_reviews(
@@ -511,6 +522,7 @@ def retrieve_latest_invoice_field_reviews(
 
 @router.get(
     "/{document_id}/attempts/{attempt_id}/review-aware-extraction",
+    response_model=ReviewAwareExtractionResponse,
     summary="Retrieve Review-Aware Invoice Extraction",
 )
 def retrieve_review_aware_extraction_result(
