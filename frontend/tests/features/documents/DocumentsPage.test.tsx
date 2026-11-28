@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
+import { MemoryRouter } from 'react-router-dom'
 import {
   afterEach,
   beforeEach,
@@ -66,10 +67,13 @@ function renderDocumentsPage() {
     },
   })
 
+  // MemoryRouter provides the router context required by React Router Links.
   return render(
-    <QueryClientProvider client={queryClient}>
-      <DocumentsPage />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <DocumentsPage />
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
 }
 
@@ -90,8 +94,12 @@ describe('Documents workspace', () => {
     renderDocumentsPage()
 
     expect(
-      await screen.findByText('invoice.pdf'),
+      await screen.findByRole('link', { name: 'invoice.pdf' }),
     ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole('link', { name: 'invoice.pdf' }),
+    ).toHaveAttribute('href', '/documents/document-123')
 
     expect(screen.getByText('1.0 KB')).toBeInTheDocument()
     expect(screen.getByText('uploaded')).toBeInTheDocument()
@@ -141,7 +149,7 @@ describe('Documents workspace', () => {
     ).toBeInTheDocument()
 
     expect(
-      await screen.findByText('invoice.pdf'),
+      await screen.findByRole('link', { name: 'invoice.pdf' }),
     ).toBeInTheDocument()
 
     expect(mockedListDocuments).toHaveBeenCalledTimes(2)

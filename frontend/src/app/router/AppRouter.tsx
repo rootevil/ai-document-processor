@@ -1,3 +1,4 @@
+import { DocumentDetailsPage } from '../../features/documents/pages/DocumentDetailsPage'
 import {
   BrowserRouter,
   Route,
@@ -13,7 +14,10 @@ export function AppRouter() {
       <Routes>
         <Route element={<AppLayout />}>
           <Route path="/" element={<DocumentsPage />} />
-
+          <Route
+            path="documents/:documentId"
+            element={<DocumentDetailsPage />}
+          />
           <Route
             path="*"
             element={

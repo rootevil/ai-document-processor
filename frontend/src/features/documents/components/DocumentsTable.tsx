@@ -1,6 +1,6 @@
 
 import { FileText } from 'lucide-react'
-
+import { Link } from 'react-router-dom'
 import type { DocumentRecord } from '../../../types/document'
 
 interface DocumentsTableProps {
@@ -124,9 +124,13 @@ export function DocumentsTable({
                       />
                     </div>
 
-                    <span className="max-w-xs truncate text-sm font-medium text-slate-900">
+                    <Link
+                      to={`/documents/${encodeURIComponent(document.id)}`}
+                      className="max-w-xs truncate text-sm font-medium text-slate-900 hover:text-blue-700 hover:underline"
+                    >
                       {document.original_filename}
-                    </span>
+                    </Link>
+
                   </div>
                 </td>
 
