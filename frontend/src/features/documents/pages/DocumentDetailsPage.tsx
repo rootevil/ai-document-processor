@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { useDocument } from "../hooks/useDocument";
 import { useProcessDocument } from "../hooks/useProcessDocument";
+import { InvoiceReviewWorkspace } from "../components/InvoiceReviewWorkspace";
 
 // Keep formatting consistent with the document workspace.
 function formatFileSize(bytes: number): string {
@@ -274,9 +275,10 @@ export function DocumentDetailsPage() {
 
   // History is returned newest first. A failed latest attempt must not be
   // mistaken for the attempt that produced the last successful extraction.
-  const latestSuccessfulAttempt = attempts.find(
-    (attempt) => attempt.status.toLowerCase() === "completed",
-  );
+  const latestSuccessfulAttempt = attempts.find((attempt) => {
+    const status = attempt.status.toLowerCase();
+    return status === "completed" || status === "processed";
+  });
 
   const attemptNumber =
     latestMutationResult?.attempt_number ??
@@ -284,6 +286,7 @@ export function DocumentDetailsPage() {
 
   const attemptId =
     latestMutationResult?.attempt_id ?? latestSuccessfulAttempt?.attempt_id;
+  const reviewAttempt = latestSuccessfulAttempt;
 
   const hasProcessingAttempts = attempts.length > 0;
 
@@ -543,6 +546,14 @@ export function DocumentDetailsPage() {
             </p>
           )}
       </section>
+
+      {reviewAttempt && (
+        <InvoiceReviewWorkspace
+          documentId={activeDocumentId}
+          attemptId={reviewAttempt.attempt_id}
+          attemptNumber={reviewAttempt.attempt_number}
+        />
+      )}
 
       {/* Processing history includes both successful and failed attempts. */}
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">

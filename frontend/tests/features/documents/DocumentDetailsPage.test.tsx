@@ -9,6 +9,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   waitFor,
 } from "@testing-library/react";
 
@@ -23,9 +24,19 @@ import {
   getProcessingResult,
   getProcessingHistory,
 } from "../../../src/lib/api/documentsApi";
+import {
+  getInvoiceFieldReviewHistory,
+  getReviewAwareExtraction,
+  submitInvoiceFieldReview,
+} from "../../../src/lib/api/reviewApi";
 
 const mockedGetProcessingResult = vi.mocked(getProcessingResult);
 const mockedGetProcessingHistory = vi.mocked(getProcessingHistory);
+const mockedGetReviewAwareExtraction = vi.mocked(getReviewAwareExtraction);
+const mockedGetInvoiceFieldReviewHistory = vi.mocked(
+  getInvoiceFieldReviewHistory,
+);
+const mockedSubmitInvoiceFieldReview = vi.mocked(submitInvoiceFieldReview);
 
 import { DocumentDetailsPage } from "../../../src/features/documents/pages/DocumentDetailsPage";
 
@@ -42,6 +53,12 @@ vi.mock("../../../src/lib/api/documentsApi", () => ({
   getProcessingHistory: vi.fn(),
 }));
 
+vi.mock("../../../src/lib/api/reviewApi", () => ({
+  getInvoiceFieldReviewHistory: vi.fn(),
+  getReviewAwareExtraction: vi.fn(),
+  submitInvoiceFieldReview: vi.fn(),
+}));
+
 const mockedGetDocument = vi.mocked(getDocument);
 const mockedProcessDocument = vi.mocked(processDocument);
 
@@ -53,6 +70,54 @@ const documentFixture: DocumentRecord = {
   file_size: 1024,
   status: "uploaded",
   uploaded_at: "2026-11-27T10:00:00Z",
+};
+
+const reviewFieldNames = [
+  "invoice_number",
+  "invoice_date",
+  "due_date",
+  "vendor_name",
+  "customer_name",
+  "subtotal",
+  "tax_amount",
+  "total_amount",
+  "currency",
+] as const;
+
+const reviewAwareFixture = {
+  document_id: "document-123",
+  attempt_id: "attempt-001",
+  created_at: "2026-11-27T10:00:04Z",
+  document_type: "invoice" as const,
+  fields: Object.fromEntries(
+    reviewFieldNames.map((fieldName) => [
+      fieldName,
+      {
+        value: fieldName === "invoice_number" ? "INV-OLD" : null,
+        original_value: fieldName === "invoice_number" ? "INV-OLD" : null,
+        effective_value: fieldName === "invoice_number" ? "INV-OLD" : null,
+        normalization_status: fieldName === "invoice_number" ? "normalized" : "missing",
+        source: fieldName === "invoice_number" ? "rule_based" : null,
+        evidence:
+          fieldName === "invoice_number"
+            ? [{ text: "Invoice No. INV-OLD", reference: { page_number: 1 } }]
+            : [],
+        references:
+          fieldName === "invoice_number"
+            ? [{ type: "page", page_number: 1 }]
+            : [],
+        review_status: "pending",
+        latest_review: null,
+      },
+    ]),
+  ),
+};
+
+const reviewHistoryFixture = {
+  document_id: "document-123",
+  attempt_id: "attempt-001",
+  total_reviews: 0,
+  reviews: [],
 };
 
 // A realistic successful processing response.
@@ -182,6 +247,18 @@ beforeEach(() => {
     original_filename: "invoice.pdf",
     total_attempts: 0,
     attempts: [],
+  });
+  mockedGetReviewAwareExtraction.mockResolvedValue(reviewAwareFixture);
+  mockedGetInvoiceFieldReviewHistory.mockResolvedValue(reviewHistoryFixture);
+  mockedSubmitInvoiceFieldReview.mockResolvedValue({
+    review_id: "review-001",
+    attempt_id: "attempt-001",
+    review_sequence: 1,
+    field_name: "invoice_number",
+    decision: "approved",
+    corrected_value: null,
+    reviewer_id: null,
+    reviewed_at: "2026-11-27T10:05:00Z",
   });
 });
 
@@ -456,5 +533,118 @@ describe("Document details page", () => {
     expect(screen.getByText("failed")).toBeInTheDocument();
     expect(screen.getByText("attempt-failed-001")).toBeInTheDocument();
     expect(screen.getByText("Total attempts: 1")).toBeInTheDocument();
+  });
+
+  it("reviews fields on the latest successful attempt and preserves original values", async () => {
+    mockedGetDocument.mockResolvedValue(documentFixture);
+    mockedGetProcessingHistory.mockResolvedValue({
+      document_id: "document-123",
+      original_filename: "invoice.pdf",
+      total_attempts: 2,
+      attempts: [
+        {
+          attempt_id: "attempt-failed-002",
+          document_id: "document-123",
+          attempt_number: 2,
+          status: "failed",
+          error_code: "EXTRACTION_FAILED",
+          error_message: "Could not process",
+          started_at: "2026-11-27T10:05:00Z",
+          completed_at: "2026-11-27T10:05:03Z",
+        },
+        {
+          attempt_id: "attempt-001",
+          document_id: "document-123",
+          attempt_number: 1,
+          status: "completed",
+          error_code: null,
+          error_message: null,
+          started_at: "2026-11-27T10:00:00Z",
+          completed_at: "2026-11-27T10:00:04Z",
+        },
+      ],
+    });
+
+    renderDetailsPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "Invoice field review" }),
+    ).toBeInTheDocument();
+    expect(mockedGetReviewAwareExtraction).toHaveBeenCalledWith(
+      "document-123",
+      "attempt-001",
+      expect.any(AbortSignal),
+    );
+    expect(await screen.findByText("“Invoice No. INV-OLD”")).toBeInTheDocument();
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve Vendor" }));
+    await waitFor(() => {
+      expect(mockedSubmitInvoiceFieldReview).toHaveBeenNthCalledWith(
+        1,
+        "document-123",
+        "attempt-001",
+        { field_name: "vendor_name", decision: "approved" },
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Correct Invoice number" }),
+    );
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Corrected value for Invoice number" }),
+      { target: { value: "INV-2026-001" } },
+    );
+    const invoiceNumberField = reviewAwareFixture.fields.invoice_number as Record<
+      string,
+      unknown
+    >;
+    mockedGetReviewAwareExtraction.mockResolvedValue({
+      ...reviewAwareFixture,
+      fields: {
+        ...reviewAwareFixture.fields,
+        invoice_number: {
+          ...invoiceNumberField,
+          effective_value: "INV-2026-001",
+          review_status: "corrected",
+        },
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
+    await waitFor(() => {
+      expect(mockedSubmitInvoiceFieldReview).toHaveBeenNthCalledWith(
+        2,
+        "document-123",
+        "attempt-001",
+        {
+          field_name: "invoice_number",
+          decision: "corrected",
+          corrected_value: "INV-2026-001",
+        },
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject Invoice date" }));
+    await waitFor(() => {
+      expect(mockedSubmitInvoiceFieldReview).toHaveBeenNthCalledWith(
+        3,
+        "document-123",
+        "attempt-001",
+        { field_name: "invoice_date", decision: "rejected" },
+      );
+    });
+
+    const invoiceNumberCard = screen
+      .getByRole("heading", { name: "Invoice number" })
+      .closest("article");
+    expect(invoiceNumberCard).not.toBeNull();
+    await waitFor(() => {
+      expect(invoiceNumberCard).toHaveTextContent("INV-OLD");
+      expect(invoiceNumberCard).toHaveTextContent("INV-2026-001");
+    });
+    expect(
+      within(invoiceNumberCard as HTMLElement).getByText("Effective value")
+        .parentElement,
+    ).toHaveTextContent("INV-2026-001");
   });
 });
